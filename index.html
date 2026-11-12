@@ -71,6 +71,18 @@ canvas.drag{cursor:grabbing}
 #tip .h.notable{color:#f0d070}#tip .h.keystone{color:#f2b65c}#tip .h.wormhole{color:#b9a0f0}
 #tip .b{padding:7px 11px;color:#8888ff;white-space:pre-line}
 #tip .v{border-top:1px dashed #333;padding-top:4px;margin-top:4px}
+#tip .v.chosen{color:#cfe3ff;background:rgba(63,120,232,.18)}
+#tip .v.off{opacity:.45}
+#pick{position:fixed;z-index:11;background:var(--panel);border:1px solid var(--gold);border-radius:4px;box-shadow:0 8px 24px #000c;max-width:340px;display:none}
+#pick .ph{padding:7px 10px;color:var(--gold2);font-weight:600;border-bottom:1px solid var(--line)}
+#pick button{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid #1d212b;padding:6px 10px;color:#8f9bff;cursor:pointer}
+#pick button:hover,#pick button.on{background:var(--panel2);color:#cfe3ff}
+#pick button.later{color:var(--muted);border-bottom:0}
+#sel .ch{padding:6px 12px;border-bottom:1px solid #1d212b}
+#sel .ch .cn{color:var(--text);margin-bottom:4px}
+#sel .ch .cn i{color:var(--red);font-style:normal;font-size:11px;margin-left:6px}
+#sel .ch button{display:block;width:100%;text-align:left;margin:2px 0;padding:3px 7px;background:#0b0e15;border:1px solid var(--line);border-radius:3px;color:#8f9bff;cursor:pointer;font-size:12px}
+#sel .ch button.on{border-color:#3f78e8;background:rgba(63,120,232,.18);color:#cfe3ff}
 #tip .r{color:#7f7f7f;font-style:italic;font-size:12px;padding:0 11px 6px;white-space:pre-line}
 #tip .f{color:#af6025;font-style:italic;padding:0 11px 7px;white-space:pre-line}
 #tip .c{padding:4px 11px;font-size:11px;color:var(--muted);border-top:1px solid #222}
@@ -126,6 +138,7 @@ canvas.drag{cursor:grabbing}
 </div>
 <div id="hint">Drag to pan · wheel to zoom · click a node to allocate a path · click an allocated node to remove it</div>
 <div id="toast"></div>
+<div id="pick"></div>
 <input type="file" id="file" accept=".build,.json" hidden>
 <script src="data.js"></script>
 <script>
@@ -149,7 +162,8 @@ let T, treeName = 'normal';           // current tree data
 let hiddenCats = new Set(store.get('hidden') || []);
 let markCats = new Set(store.get('marked') || []);
 let opts = Object.assign({ dim:false, prune:true, strict:false, bg:true, fade:false }, store.get('opts') || {});
-let alloc = new Set();                // allocated node ids (start excluded)
+let alloc = new Set();
+let choices = {};                     // choice node id -> picked option index                // allocated node ids (start excluded)
 let hidden = new Set();               // effective hidden node ids
 let adj = {};                         // id -> [ids] (no masteries)
 let hover = null, previewPath = null, searchHits = [], searchIdx = -1;
@@ -247,10 +261,18 @@ function refreshCatCounts(){
 }
 
 // ---------- visibility ----------
+// "Select a type of content" nodes whose options span several content types
+function mixedCats(n){
+  if (!n.vc) return null;
+  const u = [...new Set(n.vc)];
+  return u.length > 1 ? u : null;
+}
 function recompute(){
   hidden = new Set();
   for (const n of T.list) {
     if (n.cat === 'Start') continue;
+    const mix = mixedCats(n);
+    if (mix) { if (mix.every(c => hiddenCats.has(c))) hidden.add(n.id); continue; }   // only hide once every option's content is hidden
     if (hiddenCats.has(n.cat) || (opts.strict && n.also && n.also.some(c => hiddenCats.has(c)))) hidden.add(n.id);
   }
   if (opts.prune && hidden.size) {
@@ -260,7 +282,7 @@ function recompute(){
       changed = false;
       for (const n of T.list) {
         if (hidden.has(n.id) || n.t === 'mastery' || n.t === 'start' || n.t === 'wormhole') continue;
-        if (!(n.cat === 'General' || (TRAVEL.has(n.cat) && n.t === 'normal'))) continue;
+        if (mixedCats(n) || !(n.cat === 'General' || (TRAVEL.has(n.cat) && n.t === 'normal'))) continue;
         const nb = adj[n.id];
         const vis = nb.filter(o => !hidden.has(o)).length;
         if (vis < nb.length && vis <= 1) { hidden.add(n.id); changed = true; }
@@ -311,17 +333,37 @@ function toggleNode(n){
     const p = findPath(n.id);
     if (!p) return toast('No visible path to that node');
     p.forEach(id => alloc.add(id));
+    if (n.v) openPicker(n);
   }
   previewPath = null;
   afterAllocChange();
 }
+function catOf(n){ return n.vc && choices[n.id] != null ? n.vc[choices[n.id]] : n.cat; }
+function setChoice(id, idx){ choices[id] = idx; closePicker(); afterAllocChange(); }
+let pickPos = { x: 0, y: 0 };
+function openPicker(n){
+  const el = $('pick');
+  el.innerHTML = `<div class="ph">${esc(n.n)}: pick one</div>` +
+    n.v.map((v, i) => `<button data-i="${i}" class="${choices[n.id] === i ? 'on' : ''}">${v.map(esc).join(' / ')}</button>`).join('') +
+    `<button class="later" data-i="-1">Decide later</button>`;
+  el.onclick = e => { const b = e.target.closest('button'); if (!b) return; const i = +b.dataset.i; i < 0 ? closePicker() : setChoice(n.id, i); };
+  el.style.display = 'block';
+  const r = el.getBoundingClientRect();
+  el.style.left = Math.max(6, Math.min(pickPos.x + 14, window.innerWidth - r.width - 6)) + 'px';
+  el.style.top = Math.max(46, Math.min(pickPos.y + 40, window.innerHeight - r.height - 6)) + 'px';
+  $('tip').style.display = 'none';
+}
+function closePicker(){ $('pick').style.display = 'none'; }
+document.addEventListener('pointerdown', e => { if (!e.target.closest('#pick') && e.target !== cv) closePicker(); });
 function afterAllocChange(){
   const used = alloc.size, max = T.points.totalPoints;
   $('points').innerHTML = `Selected <b>${used}</b> / ${max}`;
   renderSelected();
   $('points').classList.toggle('over', used > max);
   refreshCatCounts();
+  for (const id in choices) if (!alloc.has(id)) delete choices[id];
   store.set('alloc.' + treeName, [...alloc]);
+  store.set('choices.' + treeName, choices);
   updateHash();
   requestDraw();
 }
@@ -346,6 +388,8 @@ function sprite(kind, key, x, y, scaleMul = 1, alpha = 1){
 }
 function isMarked(n){
   if (!markCats.size) return false;
+  const mix = mixedCats(n);
+  if (mix) return mix.some(c => markCats.has(c));
   return markCats.has(n.cat) || (opts.strict && n.t !== 'mastery' && !!n.also && n.also.some(c => markCats.has(c)));
 }
 function fadeOf(n){ return opts.fade && markCats.size && !isMarked(n) && n.t !== 'start' && !isAlloc(n.id) ? 0.3 : 1; }
@@ -496,7 +540,8 @@ function showTip(n, sx, sy){
   if (n.t === 'mastery') h += `<div class="c">Cluster: <b>${esc(n.cat)}</b></div>`;
   else {
     let body = (n.s || []).map(esc).join('\n');
-    if (n.v) body += n.v.map((v, i) => `<div class="v">Option ${i + 1}: ${v.map(esc).join('\n')}</div>`).join('');
+    const pick = choices[n.id];
+    if (n.v) body += n.v.map((v, i) => `<div class="v${pick === i ? ' chosen' : pick != null ? ' off' : ''}">${pick === i ? '✓ ' : ''}Option ${i + 1}: ${v.map(esc).join('\n')}</div>`).join('');
     if (body) h += `<div class="b">${body}</div>`;
     if (n.r) h += `<div class="r">${n.r.map(esc).join('\n')}</div>`;
     if (n.f) h += `<div class="f">${n.f.map(esc).join('\n')}</div>`;
@@ -504,7 +549,9 @@ function showTip(n, sx, sy){
       let extra = '';
       if (!isAlloc(n.id) && !hidden.has(n.id) && previewPath) extra = ` · path cost <b>${previewPath.length}</b>`;
       if (hidden.has(n.id)) extra += ' · <b>hidden</b>';
-      h += `<div class="c">Content: <b>${esc(n.cat)}</b>${n.also ? ' (mentions ' + n.also.map(esc).join(', ') + ')' : ''}${extra}</div>`;
+      if (n.v && alloc.has(n.id) && pick == null) extra += ' · <b>no option picked</b>';
+      const mix = mixedCats(n);
+      h += `<div class="c">Content: <b>${esc(mix ? mix.join(', ') : n.cat)}</b>${n.also ? ' (mentions ' + n.also.map(esc).join(', ') + ')' : ''}${extra}</div>`;
     }
   }
   tip.innerHTML = h; tip.style.display = 'block';
@@ -551,7 +598,11 @@ function endPointer(e){
   if (pointers.size < 2) pinch = null;
   if (pointers.size === 0) {
     cv.classList.remove('drag'); dragStart = null;
-    if (wasClick && e.type === 'pointerup') { const n = nodeAt(e.offsetX, e.offsetY); if (n) { toggleNode(n); hover = null; showTip(n, e.offsetX, e.offsetY); } }
+    if (wasClick && e.type === 'pointerup') {
+      closePicker();
+      const n = nodeAt(e.offsetX, e.offsetY);
+      if (n) { pickPos = { x: e.offsetX, y: e.offsetY }; toggleNode(n); hover = null; if ($('pick').style.display !== 'block') showTip(n, e.offsetX, e.offsetY); }
+    }
   }
 }
 cv.addEventListener('pointerup', endPointer);
@@ -582,11 +633,15 @@ function statParts(line){
   return { tpl, nums };
 }
 function summarise(ids){
-  const fx = new Map(), choices = [];
+  const fx = new Map(), pending = [];
   for (const id of ids) {
     const n = T.nodes[id];
-    if (n.v && !(n.s || []).length) { choices.push(n); continue; }
-    for (const line of (n.s || []).join('\n').split('\n')) {
+    let lines = n.s || [];
+    if (n.v) {
+      if (choices[id] == null) { pending.push(n); continue; }
+      lines = n.vt[choices[id]];
+    }
+    for (const line of lines.join('\n').split('\n')) {
       if (!line.trim()) continue;
       const { tpl, nums } = statParts(line);
       let e = fx.get(tpl);
@@ -596,9 +651,10 @@ function summarise(ids){
     }
   }
   for (const e of fx.values()) { let i = 0; e.text = e.tpl.replace(/\u0000/g, () => fmtNum(e.sums[i++])); }
-  return { fx: [...fx.values()].sort((a, b) => a.text.localeCompare(b.text)), choices };
+  return { fx: [...fx.values()].sort((a, b) => a.text.localeCompare(b.text)), pending };
 }
-const choiceHtml = n => `<div class="fx">${esc(n.n)} <i>choice, pick in game:</i> ${n.v.map(v => esc(v.join(' / '))).join(' <i>or</i> ')}</div>`;
+const choiceHtml = n => `<div class="ch" data-ch="${n.id}"><div class="cn">${esc(n.n)}${choices[n.id] == null ? '<i>pick one</i>' : ''}</div>` +
+  n.v.map((v, i) => `<button data-opt="${i}" class="${choices[n.id] === i ? 'on' : ''}">${v.map(esc).join(' / ')}</button>`).join('') + `</div>`;
 function renderSelected(){
   const body = $('selBody'); if (!body) return;
   const ids = [...alloc], max = T.points.totalPoints;
@@ -613,28 +669,35 @@ function renderSelected(){
     const linked = n => neighbours(n.id).filter(o => alloc.has(o)).length;
     return [...g.values()].sort((a, b) => a[0].n.localeCompare(b[0].n)).map(ns => {
       const n = ns.slice().sort((a, b) => linked(a) - linked(b))[0];
-      return `<div class="nd" data-id="${n.id}"><span class="nm">${esc(n.n)}${ns.length > 1 ? ` <span class="k">×${ns.length}</span>` : ''}</span><span class="k">${esc(n.cat)}</span><button title="Remove one" data-rm="${n.id}">×</button></div>`;
+      return `<div class="nd" data-id="${n.id}"><span class="nm">${esc(n.n)}${ns.length > 1 ? ` <span class="k">×${ns.length}</span>` : ''}</span><span class="k">${esc(catOf(n))}</span><button title="Remove one" data-rm="${n.id}">×</button></div>`;
     }).join('');
   };
   let h = '';
   if (selMode === 'all') {
-    const { fx, choices } = summarise(ids);
-    h += `<h3>Effects</h3>` + fxHtml(fx) + choices.map(choiceHtml).join('');
+    const { fx } = summarise(ids);
+    h += `<h3>Effects</h3>` + fxHtml(fx);
   } else {
     const by = {};
-    for (const id of ids) (by[T.nodes[id].cat] = by[T.nodes[id].cat] || []).push(id);
+    for (const id of ids) { const c = catOf(T.nodes[id]); (by[c] = by[c] || []).push(id); }
     const cats = Object.keys(by).sort((a, b) => by[b].length - by[a].length || a.localeCompare(b));
     for (const c of cats) {
-      const { fx, choices } = summarise(by[c]);
+      const { fx } = summarise(by[c]);
       const nodes = by[c].map(id => T.nodes[id]);
       const big = nodes.filter(n => n.t === 'notable' || n.t === 'keystone').length;
-      h += `<h3>${esc(c)} <span>${nodes.length} node${nodes.length > 1 ? 's' : ''}${big ? ` · ${big} notable${big > 1 ? 's' : ''}` : ''}</span></h3>` + fxHtml(fx) + choices.map(choiceHtml).join('');
+      h += `<h3>${esc(c)} <span>${nodes.length} node${nodes.length > 1 ? 's' : ''}${big ? ` · ${big} notable${big > 1 ? 's' : ''}` : ''}</span></h3>` + fxHtml(fx);
     }
+  }
+  const chs = ids.map(id => T.nodes[id]).filter(n => n.v).sort((a, b) => (choices[a.id] != null) - (choices[b.id] != null) || a.n.localeCompare(b.n));
+  if (chs.length) {
+    const open = chs.filter(n => choices[n.id] == null).length;
+    h = `<h3>Choice nodes <span>${open ? open + ' not picked yet' : 'all picked'}</span></h3>` + chs.map(choiceHtml).join('') + h;
   }
   h += `<h3>Nodes <span>${ids.length}</span></h3>` + nodeHtml(ids.map(id => T.nodes[id]));
   body.innerHTML = h;
 }
 $('selBody').addEventListener('click', e => {
+  const opt = e.target.closest('[data-opt]');
+  if (opt) { const id = opt.closest('[data-ch]').dataset.ch, i = +opt.dataset.opt; choices[id] === i ? (delete choices[id], afterAllocChange()) : setChoice(id, i); return; }
   const rm = e.target.closest('[data-rm]');
   if (rm) { toggleNode(T.nodes[rm.dataset.rm]); return; }
   const nd = e.target.closest('.nd');
@@ -651,7 +714,7 @@ document.querySelectorAll('#sel .tabs .btn').forEach(b => b.onclick = () => { se
 { const o = store.get('selOpen'); setSelOpen(o === null ? window.innerWidth >= 1100 : o); }
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
   if (b.dataset.tree === treeName) return;
-  loadTree(b.dataset.tree); alloc = new Set(store.get('alloc.' + treeName) || []); afterAllocChange(); fit();
+  loadTree(b.dataset.tree); alloc = new Set(store.get('alloc.' + treeName) || []); choices = store.get('choices.' + treeName) || {}; afterAllocChange(); fit();
 });
 function setAll(hide){
   hiddenCats = new Set(hide ? T.catNames : []);
@@ -697,16 +760,20 @@ function updateHash(){
   const p = new URLSearchParams();
   if (treeName !== 'normal') p.set('t', treeName);
   if (alloc.size) p.set('n', [...alloc].join('.'));
+  const ch = Object.entries(choices).map(([id, i]) => id + '-' + i);
+  if (ch.length) p.set('c', ch.join('.'));
   if (hiddenCats.size) p.set('h', [...hiddenCats].join('|'));
   if (markCats.size) p.set('m', [...markCats].join('|'));
   history.replaceState(null, '', p.toString() ? '#' + p.toString() : location.pathname + location.search);
 }
+let hashChoices = null;
 function readHash(){
   const p = new URLSearchParams(location.hash.slice(1));
   if (!location.hash) return false;
   if (p.get('t') && ATLAS[p.get('t')]) treeName = p.get('t');
   if (p.has('h')) hiddenCats = new Set(p.get('h').split('|').filter(Boolean));
   if (p.has('m')) markCats = new Set(p.get('m').split('|').filter(Boolean));
+  if (p.has('c')) { hashChoices = {}; for (const kv of p.get('c').split('.')) { const [id, i] = kv.split('-'); if (id && i !== undefined) hashChoices[id] = +i; } }
   return p.has('n') ? p.get('n').split('.').filter(Boolean) : [];
 }
 function toast(msg){ const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 2200); }
@@ -742,6 +809,7 @@ resize();
 const fromHash = readHash();
 loadTree(treeName);
 alloc = new Set((fromHash && fromHash.length ? fromHash : store.get('alloc.' + treeName) || []).filter(id => T.nodes[id]));
+choices = (fromHash && fromHash.length ? hashChoices : store.get('choices.' + treeName)) || {};
 afterAllocChange();
 fit();
 })();
