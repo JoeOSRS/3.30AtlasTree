@@ -91,7 +91,8 @@ canvas.drag{cursor:grabbing}
 #stages .st{display:flex;align-items:center;gap:5px;padding:3px 8px;border:1px solid var(--line);border-radius:3px;background:#0b0e15;color:var(--text);cursor:pointer;font-size:12px}
 #stages .st i{width:10px;height:10px;border-radius:50%;display:inline-block}
 #stages .st span{color:var(--muted)}
-#stages .st.on{border-color:var(--gold2);background:var(--panel2)}
+#stages .st.on{border-color:var(--gold2);background:var(--panel2);box-shadow:0 0 0 1px var(--gold2)}
+#stages .st.cur{border-style:dashed;border-color:var(--gold)}
 #stages .lbl{color:var(--muted);font-size:11px;margin-right:2px}
 #sel .nd .dot{width:8px;height:8px;border-radius:50%;flex:none}
 #hint{position:fixed;right:10px;bottom:10px;color:var(--muted);font-size:11px;z-index:3;text-align:right;pointer-events:none}
@@ -174,6 +175,7 @@ let opts = Object.assign({ dim:false, prune:true, strict:false, bg:true, fade:fa
 let alloc = new Set();
 let stageOf = {};                     // allocated node id -> stage index (0-based)
 let curStage = 0;                     // stage new allocations go into
+let focusStage = null;                // stage picked in the bar: everything else is dimmed
 const STAGE_COLORS = ['#d9b35a', '#4fb8f0', '#6fd46f', '#e46fe0', '#ff8a3d', '#f2e24a', '#a98bff', '#ff5a6e', '#3fe0c8', '#ffffff'];
 const stageColor = i => STAGE_COLORS[i % STAGE_COLORS.length];
 const stageCount = () => Math.max(curStage, ...Object.values(stageOf), 0) + 1;
@@ -388,18 +390,24 @@ function afterAllocChange(){
 
 // ---------- stages ----------
 function renderStages(){
+  if (focusStage != null && focusStage >= stageCount()) focusStage = null;
   const n = stageCount(), cnt = Array(n).fill(0);
   for (const id of alloc) cnt[stageOf[id] || 0]++;
   let h = '<span class="lbl">Stage</span>';
   for (let i = 0; i < n; i++)
-    h += `<button class="st${i === curStage ? ' on' : ''}" data-st="${i}" title="Allocate into stage ${i + 1}"><i style="background:${stageColor(i)}"></i>${i + 1} <span>${cnt[i]}</span></button>`;
+    h += `<button class="st${i === focusStage ? ' on' : focusStage == null && i === curStage ? ' cur' : ''}" data-st="${i}" title="${i === focusStage ? 'Click again to unselect' : `Show only stage ${i + 1} (new nodes go into it)`}"><i style="background:${stageColor(i)}"></i>${i + 1} <span>${cnt[i]}</span></button>`;
   h += `<button class="btn" id="stNext" title="Start a new stage: the next nodes you allocate get a new line colour">Next stage ›</button>`;
   $('stages').innerHTML = h;
 }
 $('stages').addEventListener('click', e => {
   const b = e.target.closest('[data-st]');
-  if (b) { curStage = +b.dataset.st; }
+  if (b) {
+    const i = +b.dataset.st;
+    if (focusStage === i) { focusStage = null; curStage = Math.max(0, ...Object.values(stageOf)); }   // unselect: back to adding onto the latest stage
+    else focusStage = curStage = i;
+  }
   else if (e.target.id === 'stNext') {
+    focusStage = null;
     const cnt = {}; for (const id of alloc) cnt[stageOf[id]] = 1;
     if (!cnt[curStage] && curStage === stageCount() - 1) return toast('Allocate some nodes in this stage first');
     curStage = stageCount() - 1 + (cnt[stageCount() - 1] ? 1 : 0);
@@ -407,7 +415,7 @@ $('stages').addEventListener('click', e => {
   // drop empty stages past the selected one
   afterAllocChange();
 });
-function setStages(saved){ stageOf = (saved && saved.of) || {}; curStage = (saved && saved.cur) || 0; }
+function setStages(saved){ stageOf = (saved && saved.of) || {}; curStage = (saved && saved.cur) || 0; focusStage = null; }
 
 // ---------- drawing ----------
 let drawQueued = false;
@@ -433,7 +441,9 @@ function isMarked(n){
   if (mix) return mix.some(c => markCats.has(c));
   return markCats.has(n.cat) || (opts.strict && n.t !== 'mastery' && !!n.also && n.also.some(c => markCats.has(c)));
 }
-function fadeOf(n){ return opts.fade && markCats.size && !isMarked(n) && n.t !== 'start' && !isAlloc(n.id) ? 0.3 : 1; }
+function fadeOf(n){
+  if (focusStage != null && !(alloc.has(n.id) && (stageOf[n.id] || 0) === focusStage)) return 0.22;
+  return opts.fade && markCats.size && !isMarked(n) && n.t !== 'start' && !isAlloc(n.id) ? 0.3 : 1; }
 function drawAlpha(n){ return nodeAlpha(n) * fadeOf(n); }
 function glow(n, a){
   const r = radius(n) + 45;
