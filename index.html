@@ -87,6 +87,13 @@ canvas.drag{cursor:grabbing}
 #tip .f{color:#af6025;font-style:italic;padding:0 11px 7px;white-space:pre-line}
 #tip .c{padding:4px 11px;font-size:11px;color:var(--muted);border-top:1px solid #222}
 #tip .c b{color:var(--gold)}
+#stages{position:fixed;top:48px;left:50%;transform:translateX(-50%);z-index:4;display:flex;flex-wrap:wrap;justify-content:center;gap:4px;align-items:center;background:rgba(14,17,24,.88);border:1px solid var(--line);border-radius:4px;padding:4px 6px;max-width:calc(100vw - 32px)}
+#stages .st{display:flex;align-items:center;gap:5px;padding:3px 8px;border:1px solid var(--line);border-radius:3px;background:#0b0e15;color:var(--text);cursor:pointer;font-size:12px}
+#stages .st i{width:10px;height:10px;border-radius:50%;display:inline-block}
+#stages .st span{color:var(--muted)}
+#stages .st.on{border-color:var(--gold2);background:var(--panel2)}
+#stages .lbl{color:var(--muted);font-size:11px;margin-right:2px}
+#sel .nd .dot{width:8px;height:8px;border-radius:50%;flex:none}
 #hint{position:fixed;right:10px;bottom:10px;color:var(--muted);font-size:11px;z-index:3;text-align:right;pointer-events:none}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--gold);padding:8px 14px;border-radius:4px;display:none;z-index:10}
 @media (max-width:760px){
@@ -133,10 +140,11 @@ canvas.drag{cursor:grabbing}
 <div id="tip"></div>
 <div id="sel" class="closed">
   <div class="hd"><span id="selCount"></span><span class="sp"></span><button class="btn" id="selClear">Clear</button><button class="btn" id="selClose" title="Close">✕</button></div>
-  <div class="tabs"><button class="btn on" data-mode="cat">By content</button><button class="btn" data-mode="all">All effects</button></div>
+  <div class="tabs"><button class="btn on" data-mode="cat">By content</button><button class="btn" data-mode="all">All effects</button><button class="btn" data-mode="stage">By stage</button></div>
   <div class="body" id="selBody"></div>
 </div>
-<div id="hint">Drag to pan · wheel to zoom · click a node to allocate a path · click an allocated node to remove it</div>
+<div id="stages" title="Each stage gets its own line colour. Nodes you allocate go into the selected stage."></div>
+<div id="hint">Drag to pan · wheel to zoom · click a node to allocate a path · click an allocated node to remove it · Next stage starts a new line colour</div>
 <div id="toast"></div>
 <div id="pick"></div>
 <input type="file" id="file" accept=".build,.json" hidden>
@@ -164,6 +172,11 @@ let hiddenCats = new Set(store.get('hidden') || []);
 let markCats = new Set(store.get('marked') || []);
 let opts = Object.assign({ dim:false, prune:true, strict:false, bg:true, fade:false }, store.get('opts') || {});
 let alloc = new Set();
+let stageOf = {};                     // allocated node id -> stage index (0-based)
+let curStage = 0;                     // stage new allocations go into
+const STAGE_COLORS = ['#d9b35a', '#4fb8f0', '#6fd46f', '#e46fe0', '#ff8a3d', '#f2e24a', '#a98bff', '#ff5a6e', '#3fe0c8', '#ffffff'];
+const stageColor = i => STAGE_COLORS[i % STAGE_COLORS.length];
+const stageCount = () => Math.max(curStage, ...Object.values(stageOf), 0) + 1;
 let choices = {};                     // choice node id -> picked option index                // allocated node ids (start excluded)
 let hidden = new Set();               // effective hidden node ids
 let adj = {};                         // id -> [ids] (no masteries)
@@ -333,7 +346,7 @@ function toggleNode(n){
     if (hidden.has(n.id)) return;
     const p = findPath(n.id);
     if (!p) return toast('No visible path to that node');
-    p.forEach(id => alloc.add(id));
+    p.forEach(id => { alloc.add(id); stageOf[id] = curStage; });
     if (n.v) openPicker(n);
   }
   previewPath = null;
@@ -359,15 +372,42 @@ document.addEventListener('pointerdown', e => { if (!e.target.closest('#pick') &
 function afterAllocChange(){
   const used = alloc.size, max = T.points.totalPoints;
   $('points').innerHTML = `Selected <b>${used}</b> / ${max}`;
-  renderSelected();
   $('points').classList.toggle('over', used > max);
   refreshCatCounts();
   for (const id in choices) if (!alloc.has(id)) delete choices[id];
+  for (const id in stageOf) if (!alloc.has(id)) delete stageOf[id];
+  for (const id of alloc) if (stageOf[id] == null) stageOf[id] = 0;
+  renderStages();
   store.set('alloc.' + treeName, [...alloc]);
+  store.set('stages.' + treeName, { of: stageOf, cur: curStage });
   store.set('choices.' + treeName, choices);
+  renderSelected();
   updateHash();
   requestDraw();
 }
+
+// ---------- stages ----------
+function renderStages(){
+  const n = stageCount(), cnt = Array(n).fill(0);
+  for (const id of alloc) cnt[stageOf[id] || 0]++;
+  let h = '<span class="lbl">Stage</span>';
+  for (let i = 0; i < n; i++)
+    h += `<button class="st${i === curStage ? ' on' : ''}" data-st="${i}" title="Allocate into stage ${i + 1}"><i style="background:${stageColor(i)}"></i>${i + 1} <span>${cnt[i]}</span></button>`;
+  h += `<button class="btn" id="stNext" title="Start a new stage: the next nodes you allocate get a new line colour">Next stage ›</button>`;
+  $('stages').innerHTML = h;
+}
+$('stages').addEventListener('click', e => {
+  const b = e.target.closest('[data-st]');
+  if (b) { curStage = +b.dataset.st; }
+  else if (e.target.id === 'stNext') {
+    const cnt = {}; for (const id of alloc) cnt[stageOf[id]] = 1;
+    if (!cnt[curStage] && curStage === stageCount() - 1) return toast('Allocate some nodes in this stage first');
+    curStage = stageCount() - 1 + (cnt[stageCount() - 1] ? 1 : 0);
+  } else return;
+  // drop empty stages past the selected one
+  afterAllocChange();
+});
+function setStages(saved){ stageOf = (saved && saved.of) || {}; curStage = (saved && saved.cur) || 0; }
 
 // ---------- drawing ----------
 let drawQueued = false;
@@ -441,7 +481,8 @@ function draw(){
     if (!inView(a.x, a.y, 3000) && !inView(b.x, b.y, 3000)) continue;
     const both = isAlloc(a.id) && isAlloc(b.id);
     const prev = (pathSet.has(a.id) || isAlloc(a.id)) && (pathSet.has(b.id) || isAlloc(b.id)) && (pathSet.has(a.id) || pathSet.has(b.id));
-    ctx.strokeStyle = both ? '#d9b35a' : prev ? '#f3e7b0' : '#6b5a3a';
+    const st = Math.max(stageOf[a.id] ?? -1, stageOf[b.id] ?? -1);
+    ctx.strokeStyle = both ? stageColor(st < 0 ? 0 : st) : prev ? '#f3e7b0' : '#6b5a3a';
     ctx.lineWidth = both || prev ? lw * 1.5 : lw;
     ctx.globalAlpha = al * (both || prev ? 1 : 0.85);
     ctx.beginPath();
@@ -476,6 +517,10 @@ function draw(){
         const F = kind === 'notable' ? 'NotableFrame' : 'KeystoneFrame';
         sprite('frame', F + (on ? 'Allocated' : can || lit ? 'CanAllocate' : 'Unallocated'), n.x, n.y, 1, a);
       }
+    }
+    if (on && n.t !== 'start' && stageCount() > 1) {
+      ctx.strokeStyle = stageColor(stageOf[n.id] || 0); ctx.globalAlpha = a; ctx.lineWidth = Math.max(8, 1.4 / cam.s);
+      ctx.beginPath(); ctx.arc(n.x, n.y, radius(n) + 6, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
     }
     if (marked) {
       ctx.strokeStyle = '#3fc8e8'; ctx.lineWidth = Math.max(10, 1.8 / cam.s);
@@ -551,6 +596,7 @@ function showTip(n, sx, sy){
       if (!isAlloc(n.id) && !hidden.has(n.id) && previewPath) extra = ` · path cost <b>${previewPath.length}</b>`;
       if (hidden.has(n.id)) extra += ' · <b>hidden</b>';
       if (n.v && alloc.has(n.id) && pick == null) extra += ' · <b>no option picked</b>';
+      if (alloc.has(n.id) && stageCount() > 1) extra += ` · <b style="color:${stageColor(stageOf[n.id] || 0)}">stage ${(stageOf[n.id] || 0) + 1}</b>`;
       const mix = mixedCats(n);
       h += `<div class="c">Content: <b>${esc(mix ? mix.join(', ') : n.cat)}</b>${n.also ? ' (mentions ' + n.also.map(esc).join(', ') + ')' : ''}${extra}</div>`;
     }
@@ -617,7 +663,7 @@ $('zout').onclick = () => zoomAt(1 / 1.4);
 $('fit').onclick = fit;
 $('bgbtn').onclick = () => { opts.bg = !opts.bg; $('bgbtn').classList.toggle('on', opts.bg); store.set('opts', opts); requestDraw(); };
 $('toggle').onclick = () => $('side').classList.toggle('closed');
-$('reset').onclick = () => { alloc = new Set(); afterAllocChange(); };
+$('reset').onclick = () => { alloc = new Set(); setStages(null); afterAllocChange(); };
 
 // ---------- selected summary ----------
 let selMode = store.get('selMode') || 'cat';
@@ -674,13 +720,21 @@ function renderSelected(){
     const linked = n => neighbours(n.id).filter(o => alloc.has(o)).length;
     return [...g.values()].sort((a, b) => a[0].n.localeCompare(b[0].n)).map(ns => {
       const n = ns.slice().sort((a, b) => linked(a) - linked(b))[0];
-      return `<div class="nd" data-id="${n.id}"><span class="nm">${esc(n.n)}${ns.length > 1 ? ` <span class="k">×${ns.length}</span>` : ''}</span><span class="k">${esc(catOf(n))}</span><button title="Remove one" data-rm="${n.id}">×</button></div>`;
+      const dot = stageCount() > 1 ? `<i class="dot" style="background:${stageColor(stageOf[n.id] || 0)}" title="Stage ${(stageOf[n.id] || 0) + 1}"></i>` : '';
+      return `<div class="nd" data-id="${n.id}">${dot}<span class="nm">${esc(n.n)}${ns.length > 1 ? ` <span class="k">×${ns.length}</span>` : ''}</span><span class="k">${esc(catOf(n))}</span><button title="Remove one" data-rm="${n.id}">×</button></div>`;
     }).join('');
   };
   let h = '';
   if (selMode === 'all') {
     const { fx } = summarise(ids);
     h += `<h3>Effects</h3>` + fxHtml(fx);
+  } else if (selMode === 'stage') {
+    let total = 0;
+    for (let i = 0; i < stageCount(); i++) {
+      const sid = ids.filter(id => (stageOf[id] || 0) === i); if (!sid.length) continue;
+      total += sid.length;
+      h += `<h3 style="color:${stageColor(i)}">Stage ${i + 1} <span>${sid.length} point${sid.length > 1 ? 's' : ''} · ${total} total</span></h3>` + fxHtml(summarise(sid).fx);
+    }
   } else {
     const by = {};
     for (const id of ids) { const c = catOf(T.nodes[id]); (by[c] = by[c] || []).push(id); }
@@ -714,12 +768,12 @@ function setSelOpen(open){
 }
 $('points').onclick = () => setSelOpen($('sel').classList.contains('closed'));
 $('selClose').onclick = () => setSelOpen(false);
-$('selClear').onclick = () => { alloc = new Set(); afterAllocChange(); };
+$('selClear').onclick = () => { alloc = new Set(); setStages(null); afterAllocChange(); };
 document.querySelectorAll('#sel .tabs .btn').forEach(b => b.onclick = () => { selMode = b.dataset.mode; store.set('selMode', selMode); renderSelected(); });
 { const o = store.get('selOpen'); setSelOpen(o === null ? window.innerWidth >= 1100 : o); }
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
   if (b.dataset.tree === treeName) return;
-  loadTree(b.dataset.tree); alloc = new Set(store.get('alloc.' + treeName) || []); choices = store.get('choices.' + treeName) || {}; afterAllocChange(); fit();
+  loadTree(b.dataset.tree); alloc = new Set(store.get('alloc.' + treeName) || []); choices = store.get('choices.' + treeName) || {}; setStages(store.get('stages.' + treeName)); afterAllocChange(); fit();
 });
 function setAll(hide){
   hiddenCats = new Set(hide ? T.catNames : []);
@@ -765,13 +819,14 @@ function updateHash(){
   const p = new URLSearchParams();
   if (treeName !== 'normal') p.set('t', treeName);
   if (alloc.size) p.set('n', [...alloc].join('.'));
+  if (stageCount() > 1) p.set('s', [...alloc].map(id => Math.min(stageOf[id] || 0, 35).toString(36)).join('') + '~' + curStage.toString(36));
   const ch = Object.entries(choices).map(([id, i]) => id + '-' + i);
   if (ch.length) p.set('c', ch.join('.'));
   if (hiddenCats.size) p.set('h', [...hiddenCats].join('|'));
   if (markCats.size) p.set('m', [...markCats].join('|'));
   history.replaceState(null, '', p.toString() ? '#' + p.toString() : location.pathname + location.search);
 }
-let hashChoices = null;
+let hashChoices = null, hashStages = null;
 function readHash(){
   const p = new URLSearchParams(location.hash.slice(1));
   if (!location.hash) return false;
@@ -779,7 +834,13 @@ function readHash(){
   if (p.has('h')) hiddenCats = new Set(p.get('h').split('|').filter(Boolean));
   if (p.has('m')) markCats = new Set(p.get('m').split('|').filter(Boolean));
   if (p.has('c')) { hashChoices = {}; for (const kv of p.get('c').split('.')) { const [id, i] = kv.split('-'); if (id && i !== undefined) hashChoices[id] = +i; } }
-  return p.has('n') ? p.get('n').split('.').filter(Boolean) : [];
+  const ids = p.has('n') ? p.get('n').split('.').filter(Boolean) : [];
+  if (p.has('s')) {
+    const [d, cur] = p.get('s').split('~');
+    hashStages = { of: {}, cur: parseInt(cur || '0', 36) || 0 };
+    ids.forEach((id, i) => { if (d[i]) hashStages.of[id] = parseInt(d[i], 36) || 0; });
+  }
+  return ids;
 }
 function toast(msg){ const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 2200); }
 $('share').onclick = async () => {
@@ -801,13 +862,13 @@ $('file').onchange = async e => {
   try {
     const d = JSON.parse(await f.text());
     const ids = (d.passives || d.nodes || []).map(String).filter(id => T.nodes[id] && T.nodes[id].t !== 'mastery' && T.nodes[id].t !== 'start');
-    alloc = new Set(ids); afterAllocChange();
+    alloc = new Set(ids); setStages(null); afterAllocChange();
     toast(`Imported ${ids.length} node${ids.length === 1 ? '' : 's'}`);
   } catch (err) { toast('Could not read that file'); }
   e.target.value = '';
 };
 
-window.__atlas = { get T(){ return T; }, get hidden(){ return hidden; }, get alloc(){ return alloc; }, toggleNode, findPath, statParts, cam };
+window.__atlas = { get T(){ return T; }, get hidden(){ return hidden; }, get alloc(){ return alloc; }, get stageOf(){ return stageOf; }, toggleNode, findPath, statParts, cam };
 
 // ---------- boot ----------
 resize();
@@ -815,6 +876,7 @@ const fromHash = readHash();
 loadTree(treeName);
 alloc = new Set((fromHash && fromHash.length ? fromHash : store.get('alloc.' + treeName) || []).filter(id => T.nodes[id]));
 choices = (fromHash && fromHash.length ? hashChoices : store.get('choices.' + treeName)) || {};
+setStages(fromHash && fromHash.length ? hashStages : store.get('stages.' + treeName));
 afterAllocChange();
 fit();
 })();
