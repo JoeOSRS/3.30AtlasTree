@@ -140,7 +140,8 @@ canvas.drag{cursor:grabbing}
 <div id="toast"></div>
 <div id="pick"></div>
 <input type="file" id="file" accept=".build,.json" hidden>
-<script src="data.js"></script>
+<!-- bump ?v= whenever data.js is rebuilt so browsers don't keep a stale cached copy -->
+<script src="data.js?v=3"></script>
 <script>
 (() => {
 'use strict';
@@ -625,8 +626,12 @@ const fmtNum = v => String(Math.round(v * 100) / 100);
 // Ranges ("Tier 1-15"), thresholds ("level 83+") and "per 1%" stay in the template unsummed.
 function statParts(line){
   const nums = [];
-  const tpl = line.replace(/(\d+(?:\.\d+)?-\d+(?:\.\d+)?)|(\d+\+)|(per \d+(?:\.\d+)?)|([+-]?\d+(?:\.\d+)?)/g, (m, range, plus, per, num) => {
+  // "Tier 3" / "Level 83" are labels and "1 to 3" / "5 or 6" are ranges, so they stay in the template.
+  // On a line with a % chance only the percentages add up: in "10% chance to have 3 additional Essences" the 3 is the fixed outcome.
+  const pct = /\d%/.test(line);
+  const tpl = line.replace(/(\d+(?:\.\d+)?-\d+(?:\.\d+)?|\d+ (?:to|or) \d+)|(\d+\+)|(per \d+(?:\.\d+)?)|(\b(?:Tier|Level) \d+)|([+-]?\d+(?:\.\d+)?)/gi, (m, range, plus, per, label, num, at, str) => {
     if (num === undefined) return m;
+    if (pct && str[at + m.length] !== '%') return m;
     nums.push(Math.abs(parseFloat(num)));
     return (num[0] === '+' || num[0] === '-' ? num[0] : '') + '\u0000';
   });
@@ -639,7 +644,7 @@ function summarise(ids){
     let lines = n.s || [];
     if (n.v) {
       if (choices[id] == null) { pending.push(n); continue; }
-      lines = n.vt[choices[id]];
+      lines = (n.vt || n.v)[choices[id]] || [];
     }
     for (const line of lines.join('\n').split('\n')) {
       if (!line.trim()) continue;
@@ -802,7 +807,7 @@ $('file').onchange = async e => {
   e.target.value = '';
 };
 
-window.__atlas = { get T(){ return T; }, get hidden(){ return hidden; }, get alloc(){ return alloc; }, toggleNode, findPath, cam };
+window.__atlas = { get T(){ return T; }, get hidden(){ return hidden; }, get alloc(){ return alloc; }, toggleNode, findPath, statParts, cam };
 
 // ---------- boot ----------
 resize();
