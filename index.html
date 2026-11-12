@@ -22,7 +22,25 @@ button,input,select{font:inherit;color:inherit}
 #search:focus{outline:none;border-color:var(--gold)}
 #scount{color:var(--muted);min-width:44px}
 .sp{flex:1}
-#points{padding:4px 10px;border:1px solid var(--line);border-radius:4px;background:#0b0e15}
+#points{padding:4px 10px;border:1px solid var(--line);border-radius:4px;background:#0b0e15;cursor:pointer}
+#points:hover,#points.on{border-color:var(--gold)}
+#sel{position:fixed;top:40px;right:0;bottom:0;width:340px;max-width:100vw;background:var(--panel);border-left:1px solid var(--line);z-index:6;display:flex;flex-direction:column;transition:transform .15s}
+#sel.closed{transform:translateX(100%)}
+#sel .hd{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line)}
+#sel .hd b{color:var(--gold2)}
+#sel .body{overflow:auto;flex:1;padding-bottom:16px}
+#sel h3{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--gold);margin:12px 12px 4px;display:flex;justify-content:space-between;gap:8px}
+#sel h3 span{color:var(--muted);text-transform:none;letter-spacing:0;font-weight:400}
+#sel .fx{padding:4px 12px;color:#8f9bff;border-bottom:1px solid #1d212b}
+#sel .fx i{color:var(--muted);font-style:normal;font-size:11px;margin-left:4px}
+#sel .nd{display:flex;align-items:center;gap:6px;padding:2px 12px;cursor:pointer}
+#sel .nd:hover{background:var(--panel2)}
+#sel .nd .nm{flex:1}
+#sel .nd .k{color:var(--muted);font-size:11px}
+#sel .nd button{background:none;border:1px solid var(--line);color:var(--muted);border-radius:3px;width:20px;height:20px;line-height:1;padding:0;cursor:pointer}
+#sel .nd button:hover{color:var(--red);border-color:var(--red)}
+#sel .empty{padding:16px 12px;color:var(--muted)}
+#sel .tabs{display:flex;gap:4px;padding:8px 12px 0}
 #points b{color:var(--gold2)}
 #points.over b{color:var(--red)}
 #side{position:fixed;top:40px;left:0;bottom:0;width:270px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;z-index:4;transition:transform .15s}
@@ -80,7 +98,7 @@ canvas.drag{cursor:grabbing}
   <button class="btn wide" id="exp" title="Download allocated nodes as a .build file">Export</button>
   <button class="btn wide" id="imp" title="Load a .build / .json file">Import</button>
   <button class="btn" id="reset" title="Unallocate everything">Reset</button>
-  <span id="points"><b>0</b> / 150</span>
+  <button id="points" title="Show the selected-nodes summary">Selected <b>0</b> / 150</button>
 </div>
 <div id="side">
   <h2>Content filter</h2>
@@ -101,6 +119,11 @@ canvas.drag{cursor:grabbing}
 <button class="btn" id="toggle" title="Toggle filter panel">☰</button>
 <canvas id="cv"></canvas>
 <div id="tip"></div>
+<div id="sel" class="closed">
+  <div class="hd"><span id="selCount"></span><span class="sp"></span><button class="btn" id="selClear">Clear</button><button class="btn" id="selClose" title="Close">✕</button></div>
+  <div class="tabs"><button class="btn on" data-mode="cat">By content</button><button class="btn" data-mode="all">All effects</button></div>
+  <div class="body" id="selBody"></div>
+</div>
 <div id="hint">Drag to pan · wheel to zoom · click a node to allocate a path · click an allocated node to remove it</div>
 <div id="toast"></div>
 <input type="file" id="file" accept=".build,.json" hidden>
@@ -294,7 +317,8 @@ function toggleNode(n){
 }
 function afterAllocChange(){
   const used = alloc.size, max = T.points.totalPoints;
-  $('points').innerHTML = `<b>${used}</b> / ${max}`;
+  $('points').innerHTML = `Selected <b>${used}</b> / ${max}`;
+  renderSelected();
   $('points').classList.toggle('over', used > max);
   refreshCatCounts();
   store.set('alloc.' + treeName, [...alloc]);
@@ -542,6 +566,89 @@ $('fit').onclick = fit;
 $('bgbtn').onclick = () => { opts.bg = !opts.bg; $('bgbtn').classList.toggle('on', opts.bg); store.set('opts', opts); requestDraw(); };
 $('toggle').onclick = () => $('side').classList.toggle('closed');
 $('reset').onclick = () => { alloc = new Set(); afterAllocChange(); };
+
+// ---------- selected summary ----------
+let selMode = store.get('selMode') || 'cat';
+const fmtNum = v => String(Math.round(v * 100) / 100);
+// Split a stat line into a template plus the numbers to add up.
+// Ranges ("Tier 1-15"), thresholds ("level 83+") and "per 1%" stay in the template unsummed.
+function statParts(line){
+  const nums = [];
+  const tpl = line.replace(/(\d+(?:\.\d+)?-\d+(?:\.\d+)?)|(\d+\+)|(per \d+(?:\.\d+)?)|([+-]?\d+(?:\.\d+)?)/g, (m, range, plus, per, num) => {
+    if (num === undefined) return m;
+    nums.push(Math.abs(parseFloat(num)));
+    return (num[0] === '+' || num[0] === '-' ? num[0] : '') + '\u0000';
+  });
+  return { tpl, nums };
+}
+function summarise(ids){
+  const fx = new Map(), choices = [];
+  for (const id of ids) {
+    const n = T.nodes[id];
+    if (n.v && !(n.s || []).length) { choices.push(n); continue; }
+    for (const line of (n.s || []).join('\n').split('\n')) {
+      if (!line.trim()) continue;
+      const { tpl, nums } = statParts(line);
+      let e = fx.get(tpl);
+      if (!e) fx.set(tpl, e = { tpl, sums: nums.map(() => 0), count: 0 });
+      nums.forEach((v, i) => e.sums[i] += v);
+      e.count++;
+    }
+  }
+  for (const e of fx.values()) { let i = 0; e.text = e.tpl.replace(/\u0000/g, () => fmtNum(e.sums[i++])); }
+  return { fx: [...fx.values()].sort((a, b) => a.text.localeCompare(b.text)), choices };
+}
+const choiceHtml = n => `<div class="fx">${esc(n.n)} <i>choice, pick in game:</i> ${n.v.map(v => esc(v.join(' / '))).join(' <i>or</i> ')}</div>`;
+function renderSelected(){
+  const body = $('selBody'); if (!body) return;
+  const ids = [...alloc], max = T.points.totalPoints;
+  $('selCount').innerHTML = `<b>${ids.length}</b> / ${max} selected`;
+  document.querySelectorAll('#sel .tabs .btn').forEach(b => b.classList.toggle('on', b.dataset.mode === selMode));
+  if (!ids.length) { body.innerHTML = '<div class="empty">Click nodes on the tree to allocate them. Their combined effects add up here.</div>'; return; }
+  const fxHtml = list => list.map(e => `<div class="fx">${esc(e.text)}${e.count > 1 ? `<i>×${e.count}</i>` : ''}</div>`).join('');
+  // one row per node name; × removes the copy with the fewest allocated neighbours (an end of the path)
+  const nodeHtml = list => {
+    const g = new Map();
+    for (const n of list) { const k = n.n + '|' + n.cat; (g.get(k) || g.set(k, []).get(k)).push(n); }
+    const linked = n => neighbours(n.id).filter(o => alloc.has(o)).length;
+    return [...g.values()].sort((a, b) => a[0].n.localeCompare(b[0].n)).map(ns => {
+      const n = ns.slice().sort((a, b) => linked(a) - linked(b))[0];
+      return `<div class="nd" data-id="${n.id}"><span class="nm">${esc(n.n)}${ns.length > 1 ? ` <span class="k">×${ns.length}</span>` : ''}</span><span class="k">${esc(n.cat)}</span><button title="Remove one" data-rm="${n.id}">×</button></div>`;
+    }).join('');
+  };
+  let h = '';
+  if (selMode === 'all') {
+    const { fx, choices } = summarise(ids);
+    h += `<h3>Effects</h3>` + fxHtml(fx) + choices.map(choiceHtml).join('');
+  } else {
+    const by = {};
+    for (const id of ids) (by[T.nodes[id].cat] = by[T.nodes[id].cat] || []).push(id);
+    const cats = Object.keys(by).sort((a, b) => by[b].length - by[a].length || a.localeCompare(b));
+    for (const c of cats) {
+      const { fx, choices } = summarise(by[c]);
+      const nodes = by[c].map(id => T.nodes[id]);
+      const big = nodes.filter(n => n.t === 'notable' || n.t === 'keystone').length;
+      h += `<h3>${esc(c)} <span>${nodes.length} node${nodes.length > 1 ? 's' : ''}${big ? ` · ${big} notable${big > 1 ? 's' : ''}` : ''}</span></h3>` + fxHtml(fx) + choices.map(choiceHtml).join('');
+    }
+  }
+  h += `<h3>Nodes <span>${ids.length}</span></h3>` + nodeHtml(ids.map(id => T.nodes[id]));
+  body.innerHTML = h;
+}
+$('selBody').addEventListener('click', e => {
+  const rm = e.target.closest('[data-rm]');
+  if (rm) { toggleNode(T.nodes[rm.dataset.rm]); return; }
+  const nd = e.target.closest('.nd');
+  if (nd) { const n = T.nodes[nd.dataset.id]; cam.x = n.x; cam.y = n.y; cam.s = Math.max(cam.s, 0.15); hover = n; requestDraw(); }
+});
+function setSelOpen(open){
+  $('sel').classList.toggle('closed', !open); $('points').classList.toggle('on', open);
+  store.set('selOpen', open);
+}
+$('points').onclick = () => setSelOpen($('sel').classList.contains('closed'));
+$('selClose').onclick = () => setSelOpen(false);
+$('selClear').onclick = () => { alloc = new Set(); afterAllocChange(); };
+document.querySelectorAll('#sel .tabs .btn').forEach(b => b.onclick = () => { selMode = b.dataset.mode; store.set('selMode', selMode); renderSelected(); });
+{ const o = store.get('selOpen'); setSelOpen(o === null ? window.innerWidth >= 1100 : o); }
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
   if (b.dataset.tree === treeName) return;
   loadTree(b.dataset.tree); alloc = new Set(store.get('alloc.' + treeName) || []); afterAllocChange(); fit();
