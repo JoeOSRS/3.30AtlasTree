@@ -860,7 +860,9 @@ $('share').onclick = async () => {
 };
 $('exp').onclick = () => {
   const data = { name: `Atlas ${alloc.size}Pts`, author: 'Atlas Tree Filter', ascendancy: '',
-                 passives: [...alloc].map(Number), inventory_slots: [], skills: [] };
+                 passives: [...alloc].map(Number), inventory_slots: [], skills: [],
+                 // extra fields for this tool: stage per passive (same order), current stage, picked choice options
+                 stages: [...alloc].map(id => stageOf[id] || 0), currentStage: curStage, choices };
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
   a.download = `Atlas ${alloc.size}Pts.build`; a.click();
@@ -872,7 +874,13 @@ $('file').onchange = async e => {
   try {
     const d = JSON.parse(await f.text());
     const ids = (d.passives || d.nodes || []).map(String).filter(id => T.nodes[id] && T.nodes[id].t !== 'mastery' && T.nodes[id].t !== 'start');
-    alloc = new Set(ids); setStages(null); afterAllocChange();
+    alloc = new Set(ids);
+    const of = {};
+    if (Array.isArray(d.stages)) (d.passives || d.nodes || []).forEach((id, i) => { if (d.stages[i] != null) of[String(id)] = +d.stages[i] || 0; });
+    setStages({ of, cur: +d.currentStage || 0 });
+    choices = {};
+    if (d.choices && typeof d.choices === 'object') for (const k in d.choices) if (alloc.has(k)) choices[k] = +d.choices[k];
+    afterAllocChange();
     toast(`Imported ${ids.length} node${ids.length === 1 ? '' : 's'}`);
   } catch (err) { toast('Could not read that file'); }
   e.target.value = '';
