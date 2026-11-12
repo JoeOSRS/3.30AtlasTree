@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas Tree Filter</title>
+<style>
+:root{
+  --bg:#07090f; --panel:#11141c; --panel2:#181c26; --line:#2a2f3c; --text:#d9d2c0; --muted:#8c8573;
+  --gold:#c8a24a; --gold2:#e9cf86; --blue:#7fa6e0; --red:#c25a4a; --green:#7cbf6a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:13px/1.35 "Segoe UI",system-ui,sans-serif;overflow:hidden}
+button,input,select{font:inherit;color:inherit}
+#top{position:fixed;inset:0 0 auto 0;height:40px;display:flex;align-items:center;gap:6px;padding:0 10px;background:var(--panel);border-bottom:1px solid var(--line);z-index:5}
+.tab{background:none;border:0;padding:6px 8px;color:var(--muted);cursor:pointer;border-radius:4px}
+.tab.on{color:var(--gold2)}
+.btn{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:4px 9px;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--gold)}
+.btn.on{border-color:var(--gold);color:var(--gold2)}
+#search{background:#0b0e15;border:1px solid var(--line);border-radius:4px;padding:5px 8px;width:220px;min-width:0}
+#search:focus{outline:none;border-color:var(--gold)}
+#scount{color:var(--muted);min-width:44px}
+.sp{flex:1}
+#points{padding:4px 10px;border:1px solid var(--line);border-radius:4px;background:#0b0e15}
+#points b{color:var(--gold2)}
+#points.over b{color:var(--red)}
+#side{position:fixed;top:40px;left:0;bottom:0;width:270px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;z-index:4;transition:transform .15s}
+#side.closed{transform:translateX(-270px)}
+#side h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--gold);margin:12px 12px 6px}
+.row{display:flex;gap:6px;padding:0 12px 8px;flex-wrap:wrap}
+.opt{display:flex;align-items:center;gap:7px;padding:3px 12px;color:var(--muted);cursor:pointer;user-select:none}
+.opt input{accent-color:var(--gold)}
+#cats{overflow:auto;flex:1;padding:4px 0 12px;border-top:1px solid var(--line)}
+.cat{display:flex;align-items:center;gap:8px;padding:3px 12px;cursor:pointer;user-select:none}
+.cat:hover{background:var(--panel2)}
+.cat input{accent-color:var(--gold);margin:0}
+.cat .ico{width:22px;height:22px;flex:none;background-repeat:no-repeat;border-radius:50%}
+.cat .nm{flex:1}
+.cat .n{color:var(--muted);font-size:11px}
+.cat .a{color:var(--gold);font-size:11px}
+.cat.off .nm{color:var(--muted);text-decoration:line-through}
+#toggle{position:fixed;top:48px;left:278px;z-index:4;transition:left .15s}
+#side.closed + #toggle{left:8px}
+canvas{position:fixed;top:40px;left:0;display:block;cursor:grab;touch-action:none}
+canvas.drag{cursor:grabbing}
+#tip{position:fixed;pointer-events:none;z-index:9;max-width:380px;background:rgba(8,8,10,.96);border:1px solid #5b4a2a;border-radius:3px;display:none;box-shadow:0 6px 20px #000a}
+#tip .h{padding:6px 10px;text-align:center;font-weight:600;color:#e2d3a6;background:linear-gradient(#2a2216,#17130c);border-bottom:1px solid #5b4a2a}
+#tip .h.notable{color:#f0d070}#tip .h.keystone{color:#f2b65c}#tip .h.wormhole{color:#b9a0f0}
+#tip .b{padding:7px 11px;color:#8888ff;white-space:pre-line}
+#tip .v{border-top:1px dashed #333;padding-top:4px;margin-top:4px}
+#tip .r{color:#7f7f7f;font-style:italic;font-size:12px;padding:0 11px 6px;white-space:pre-line}
+#tip .f{color:#af6025;font-style:italic;padding:0 11px 7px;white-space:pre-line}
+#tip .c{padding:4px 11px;font-size:11px;color:var(--muted);border-top:1px solid #222}
+#tip .c b{color:var(--gold)}
+#hint{position:fixed;right:10px;bottom:10px;color:var(--muted);font-size:11px;z-index:3;text-align:right;pointer-events:none}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--gold);padding:8px 14px;border-radius:4px;display:none;z-index:10}
+@media (max-width:760px){
+  #side{width:240px}#side.closed{transform:translateX(-240px)}#toggle{left:248px}
+  #search{width:110px}.wide{display:none}
+}
+</style>
+</head>
+<body>
+<div id="top">
+  <button class="tab on" data-tree="normal">Atlas Tree</button>
+  <button class="tab" data-tree="ruthless">Ruthless</button>
+  <input id="search" placeholder="Search nodes" autocomplete="off">
+  <span id="scount"></span>
+  <span class="sp"></span>
+  <button class="btn" id="zout" title="Zoom out">−</button>
+  <button class="btn" id="zin" title="Zoom in">+</button>
+  <button class="btn" id="fit">Fit</button>
+  <button class="btn on wide" id="bgbtn">Background</button>
+  <button class="btn wide" id="share" title="Copy a link with your allocated nodes and filters">Share</button>
+  <button class="btn wide" id="exp" title="Download allocated nodes as a .build file">Export</button>
+  <button class="btn wide" id="imp" title="Load a .build / .json file">Import</button>
+  <button class="btn" id="reset" title="Unallocate everything">Reset</button>
+  <span id="points"><b>0</b> / 150</span>
+</div>
+<div id="side">
+  <h2>Content filter</h2>
+  <div class="row">
+    <button class="btn" id="all">Show all</button>
+    <button class="btn" id="none">Hide all</button>
+    <button class="btn" id="invert">Invert</button>
+  </div>
+  <label class="opt"><input type="checkbox" id="optDim"> Dim hidden nodes instead of removing</label>
+  <label class="opt" title="Generic travel nodes (Map Drop Chance, Pack Size, Item Rarity, Thread Drop Chance...) that become dead ends once their content is hidden are hidden too"><input type="checkbox" id="optPrune" checked> Hide dead-end paths into hidden content</label>
+  <label class="opt" title="Also hide nodes from other clusters that mention a hidden content type, e.g. 'Exotic Repositories' (Strongboxes) mentions Mercenaries"><input type="checkbox" id="optStrict"> Also hide nodes that mention it</label>
+  <h2>Content types</h2>
+  <div id="cats"></div>
+</div>
+<button class="btn" id="toggle" title="Toggle filter panel">☰</button>
+<canvas id="cv"></canvas>
+<div id="tip"></div>
+<div id="hint">Drag to pan · wheel to zoom · click a node to allocate a path · click an allocated node to remove it</div>
+<div id="toast"></div>
+<input type="file" id="file" accept=".build,.json" hidden>
+<script src="data.js"></script>
+<script>
+(() => {
+'use strict';
+const ATLAS = window.ATLAS;
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+const store = { get(k){ try { return JSON.parse(localStorage.getItem('atlasFilter.' + k)); } catch { return null; } },
+                set(k, v){ try { localStorage.setItem('atlasFilter.' + k, JSON.stringify(v)); } catch {} } };
+
+// ---------- images ----------
+const IMG = {};
+function img(file){
+  if (!IMG[file]) { const i = new Image(); i.onload = requestDraw; i.src = 'assets/' + file; IMG[file] = i; }
+  return IMG[file];
+}
+
+// ---------- state ----------
+let T, treeName = 'normal';           // current tree data
+let hiddenCats = new Set(store.get('hidden') || []);
+let opts = Object.assign({ dim:false, prune:true, strict:false, bg:true }, store.get('opts') || {});
+let alloc = new Set();                // allocated node ids (start excluded)
+let hidden = new Set();               // effective hidden node ids
+let adj = {};                         // id -> [ids] (no masteries)
+let hover = null, previewPath = null, searchHits = [], searchIdx = -1;
+const cam = { x: 0, y: 0, s: 0.05 };
+let W = 0, H = 0, dpr = 1;
+
+const TRAVEL = new Set(['General', 'Threads', 'Magic Monsters', 'Rare Monsters', 'Maps']);
+const NOT_FILTERABLE = new Set(['Start']);
+
+function loadTree(name, keepAlloc){
+  treeName = name; T = ATLAS[name];
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.tree === name));
+  adj = {};
+  const N = T.nodes;
+  T.list = Object.values(N);
+  T.start = T.list.find(n => n.t === 'start');
+  for (const n of T.list) adj[n.id] = [];
+  T.edges = [];
+  const seen = new Set();
+  for (const n of T.list) {
+    if (n.t === 'mastery') continue;
+    for (const o of n.out.concat(n.in)) {
+      const m = N[o]; if (!m || m.t === 'mastery') continue;
+      const key = n.id < o ? n.id + '-' + o : o + '-' + n.id;
+      if (seen.has(key)) continue; seen.add(key);
+      adj[n.id].push(o); adj[o].push(n.id);
+      T.edges.push([n, m, (n.arc && n.arc[o]) || (m.arc && m.arc[n.id]) || null]);
+    }
+  }
+  // gateway pairs: same name connect to each other (pathing only)
+  const gw = {};
+  for (const n of T.list) if (n.t === 'wormhole') (gw[n.n] = gw[n.n] || []).push(n.id);
+  T.gate = {};
+  for (const k in gw) if (gw[k].length === 2) { T.gate[gw[k][0]] = gw[k][1]; T.gate[gw[k][1]] = gw[k][0]; }
+  // groups -> nodes, mastery -> its cluster
+  T.groupNodes = {};
+  for (const n of T.list) (T.groupNodes[n.g] = T.groupNodes[n.g] || []).push(n);
+  // bounds of the visible tree
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for (const n of T.list) { x0=Math.min(x0,n.x); y0=Math.min(y0,n.y); x1=Math.max(x1,n.x); y1=Math.max(y1,n.y); }
+  T.box = [x0,y0,x1,y1];
+  if (!keepAlloc) alloc = new Set();
+  else alloc = new Set([...alloc].filter(id => N[id]));
+  buildCats();
+  recompute();
+}
+
+// ---------- categories ----------
+function masteryIconFor(cat){
+  const m = T.list.find(n => n.t === 'mastery' && n.cat === cat);
+  return m ? m.ic : null;
+}
+function buildCats(){
+  const counts = {}, allocCounts = {};
+  for (const n of T.list) {
+    if (n.t === 'mastery' || NOT_FILTERABLE.has(n.cat)) continue;
+    counts[n.cat] = (counts[n.cat] || 0) + 1;
+    if (alloc.has(n.id)) allocCounts[n.cat] = (allocCounts[n.cat] || 0) + 1;
+  }
+  const names = Object.keys(counts).sort((a, b) => {
+    const sa = a === 'General' || a === 'Gateways', sb = b === 'General' || b === 'Gateways';
+    return sa === sb ? a.localeCompare(b) : sa ? 1 : -1;
+  });
+  const box = $('cats'); box.innerHTML = '';
+  const sp = T.sprites.mastery, sheet = 'assets/' + sp.file;
+  for (const c of names) {
+    const el = document.createElement('label');
+    el.className = 'cat' + (hiddenCats.has(c) ? ' off' : '');
+    const ic = masteryIconFor(c), co = ic && sp.coords[ic];
+    const icoStyle = co ? `background-image:url(${sheet});background-size:${22 / co.w * sp.w}px auto;background-position:-${co.x * 22 / co.w}px -${co.y * 22 / co.h}px` : 'background:#222';
+    el.innerHTML = `<input type="checkbox" ${hiddenCats.has(c) ? '' : 'checked'}><span class="ico" style="${icoStyle}"></span><span class="nm"></span>` +
+      `<span class="a">${allocCounts[c] ? allocCounts[c] + ' ✓' : ''}</span><span class="n">${counts[c]}</span>`;
+    el.querySelector('.nm').textContent = c;
+    el.querySelector('input').addEventListener('change', e => {
+      e.target.checked ? hiddenCats.delete(c) : hiddenCats.add(c);
+      el.classList.toggle('off', !e.target.checked);
+      store.set('hidden', [...hiddenCats]); recompute(); updateHash();
+    });
+    box.appendChild(el);
+  }
+  T.catNames = names;
+}
+function refreshCatCounts(){
+  const allocCounts = {};
+  for (const id of alloc) { const n = T.nodes[id]; allocCounts[n.cat] = (allocCounts[n.cat] || 0) + 1; }
+  document.querySelectorAll('#cats .cat').forEach(el => {
+    const c = el.querySelector('.nm').textContent;
+    el.querySelector('.a').textContent = allocCounts[c] ? allocCounts[c] + ' ✓' : '';
+  });
+}
+
+// ---------- visibility ----------
+function recompute(){
+  hidden = new Set();
+  for (const n of T.list) {
+    if (n.cat === 'Start') continue;
+    if (hiddenCats.has(n.cat) || (opts.strict && n.also && n.also.some(c => hiddenCats.has(c)))) hidden.add(n.id);
+  }
+  if (opts.prune && hidden.size) {
+    // iteratively drop generic travel nodes that became dead ends because a neighbour is hidden
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const n of T.list) {
+        if (hidden.has(n.id) || n.t === 'mastery' || n.t === 'start' || n.t === 'wormhole') continue;
+        if (!(n.cat === 'General' || (TRAVEL.has(n.cat) && n.t === 'normal'))) continue;
+        const nb = adj[n.id];
+        const vis = nb.filter(o => !hidden.has(o)).length;
+        if (vis < nb.length && vis <= 1) { hidden.add(n.id); changed = true; }
+      }
+    }
+  }
+  // masteries follow their category
+  previewPath = null;
+  runSearch();
+  requestDraw();
+}
+const isHidden = id => hidden.has(id);
+
+// ---------- allocation ----------
+const isAlloc = id => alloc.has(id) || (T.start && id === T.start.id);
+function neighbours(id){ const a = adj[id].slice(); if (T.gate[id]) a.push(T.gate[id]); return a; }
+function canAllocate(id){ return !isAlloc(id) && neighbours(id).some(isAlloc); }
+function findPath(target){
+  // BFS from every allocated node through visible, non-mastery nodes
+  const prev = new Map(), q = [];
+  for (const id of [T.start.id, ...alloc]) { prev.set(id, null); q.push(id); }
+  for (let i = 0; i < q.length; i++) {
+    const id = q[i];
+    if (id === target) break;
+    for (const o of neighbours(id)) {
+      if (prev.has(o) || hidden.has(o) || T.nodes[o].t === 'mastery') continue;
+      prev.set(o, id); q.push(o);
+    }
+  }
+  if (!prev.has(target)) return null;
+  const path = [];
+  for (let id = target; id && !isAlloc(id); id = prev.get(id)) path.push(id);
+  return path;
+}
+function reachableFromStart(set){
+  const ok = new Set([T.start.id]), q = [T.start.id];
+  for (let i = 0; i < q.length; i++) for (const o of neighbours(q[i])) if (set.has(o) && !ok.has(o)) { ok.add(o); q.push(o); }
+  return ok;
+}
+function toggleNode(n){
+  if (n.t === 'mastery' || n.t === 'start') return;
+  if (alloc.has(n.id)) {
+    alloc.delete(n.id);
+    const ok = reachableFromStart(alloc);
+    alloc = new Set([...alloc].filter(id => ok.has(id)));
+  } else {
+    if (hidden.has(n.id)) return;
+    const p = findPath(n.id);
+    if (!p) return toast('No visible path to that node');
+    p.forEach(id => alloc.add(id));
+  }
+  previewPath = null;
+  afterAllocChange();
+}
+function afterAllocChange(){
+  const used = alloc.size, max = T.points.totalPoints;
+  $('points').innerHTML = `<b>${used}</b> / ${max}`;
+  $('points').classList.toggle('over', used > max);
+  refreshCatCounts();
+  store.set('alloc.' + treeName, [...alloc]);
+  updateHash();
+  requestDraw();
+}
+
+// ---------- drawing ----------
+let drawQueued = false;
+function requestDraw(){ if (!drawQueued) { drawQueued = true; requestAnimationFrame(draw); } }
+function resize(){
+  dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight - 40;
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  requestDraw();
+}
+function sprite(kind, key, x, y, scaleMul = 1, alpha = 1){
+  const sp = T.sprites[kind]; if (!sp) return;
+  const c = sp.coords[key]; if (!c) return;
+  const im = img(sp.file); if (!im.complete || !im.naturalWidth) return;
+  const w = c.w / sp.scale * scaleMul, h = c.h / sp.scale * scaleMul;
+  if (alpha !== 1) ctx.globalAlpha = alpha;
+  ctx.drawImage(im, c.x, c.y, c.w, c.h, x - w / 2, y - h / 2, w, h);
+  if (alpha !== 1) ctx.globalAlpha = 1;
+}
+function nodeAlpha(n){ return hidden.has(n.id) ? (opts.dim || alloc.has(n.id) ? 0.12 : 0) : 1; }
+const screenToWorld = (sx, sy) => [(sx - W / 2) / cam.s + cam.x, (sy - H / 2) / cam.s + cam.y];
+
+function draw(){
+  drawQueued = false;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#07090f'; ctx.fillRect(0, 0, cv.width, cv.height);
+  const s = cam.s * dpr;
+  ctx.setTransform(s, 0, 0, s, (W / 2 - cam.x * cam.s) * dpr, (H / 2 - cam.y * cam.s) * dpr);
+  const [vx0, vy0] = screenToWorld(-300, -300), [vx1, vy1] = screenToWorld(W + 300, H + 300);
+  const inView = (x, y, r = 300) => x + r > vx0 && x - r < vx1 && y + r > vy0 && y - r < vy1;
+
+  // background
+  if (opts.bg) {
+    const bg = T.sprites.atlasBackground, c = bg && bg.coords.AtlasPassiveBackground, im = bg && img(bg.file);
+    if (c && im.complete && im.naturalWidth) {
+      const [x0, y0, x1, y1] = T.box, size = Math.max(x1 - x0, y1 - y0) * 1.16;
+      ctx.globalAlpha = 0.9;
+      ctx.drawImage(im, c.x, c.y, c.w, c.h, (x0 + x1) / 2 - size / 2, (y0 + y1) / 2 - size / 2, size, size);
+      ctx.globalAlpha = 1;
+    }
+  }
+  // group backgrounds
+  for (const gid in T.groups) {
+    const g = T.groups[gid]; if (!g.bg || !inView(g.x, g.y, 600)) continue;
+    const ns = T.groupNodes[gid] || [];
+    const a = ns.length ? Math.max(...ns.map(nodeAlpha)) : 1; if (a === 0) continue;
+    sprite('groupBackground', g.bg.image, g.x + (g.bg.offsetX || 0) * 2, g.y + (g.bg.offsetY || 0) * 2, 1, a * 0.85);
+  }
+  // edges
+  const pathSet = new Set(previewPath || []);
+  const lw = Math.max(9, 1.3 / cam.s);
+  ctx.lineCap = 'round';
+  for (const [a, b, arc] of T.edges) {
+    const al = Math.min(nodeAlpha(a), nodeAlpha(b)); if (al === 0) continue;
+    if (!inView(a.x, a.y, 3000) && !inView(b.x, b.y, 3000)) continue;
+    const both = isAlloc(a.id) && isAlloc(b.id);
+    const prev = (pathSet.has(a.id) || isAlloc(a.id)) && (pathSet.has(b.id) || isAlloc(b.id)) && (pathSet.has(a.id) || pathSet.has(b.id));
+    ctx.strokeStyle = both ? '#d9b35a' : prev ? '#f3e7b0' : '#6b5a3a';
+    ctx.lineWidth = both || prev ? lw * 1.5 : lw;
+    ctx.globalAlpha = al * (both || prev ? 1 : 0.85);
+    ctx.beginPath();
+    edgePath(a, b, arc);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // masteries
+  for (const n of T.list) {
+    if (n.t !== 'mastery' || !inView(n.x, n.y)) continue;
+    const a = hiddenCats.has(n.cat) ? (opts.dim ? 0.12 : 0) : 1; if (!a) continue;
+    sprite('mastery', n.ic, n.x, n.y, 1, a);
+  }
+  // nodes
+  const hits = new Set(searchHits.map(n => n.id));
+  for (const n of T.list) {
+    if (n.t === 'mastery' || !inView(n.x, n.y)) continue;
+    const a = nodeAlpha(n); if (!a) continue;
+    const on = isAlloc(n.id), lit = on || pathSet.has(n.id), can = !on && canAllocate(n.id);
+    if (n.t === 'start') { sprite('startNode', 'AtlasPassiveSkillScreenStart', n.x, n.y, 1, a); continue; }
+    if (n.t === 'wormhole') {
+      sprite(lit ? 'wormholeActive' : 'wormholeInactive', 'Wormhole', n.x, n.y, 1, a);
+      sprite('frame', on ? 'WormholeFrameAllocated' : can || lit ? 'WormholeFrameCanAllocate' : 'WormholeFrameUnallocated', n.x, n.y, 1, a);
+    } else {
+      const kind = n.t === 'notable' ? 'notable' : n.t === 'keystone' ? 'keystone' : 'normal';
+      sprite(kind + (lit ? 'Active' : 'Inactive'), n.ic, n.x, n.y, 1, a);
+      if (kind === 'normal') sprite('frame', on ? 'PSSkillFrameActive' : can || lit ? 'PSSkillFrameHighlighted' : 'PSSkillFrame', n.x, n.y, 1, a);
+      else {
+        const F = kind === 'notable' ? 'NotableFrame' : 'KeystoneFrame';
+        sprite('frame', F + (on ? 'Allocated' : can || lit ? 'CanAllocate' : 'Unallocated'), n.x, n.y, 1, a);
+      }
+    }
+    if (hits.has(n.id)) {
+      ctx.strokeStyle = searchHits[searchIdx] === n ? '#ffffff' : '#ffd84a';
+      ctx.lineWidth = Math.max(14, 2.5 / cam.s);
+      ctx.beginPath(); ctx.arc(n.x, n.y, radius(n) + 30, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+  if (hover && hover.t !== 'mastery') {
+    ctx.strokeStyle = 'rgba(255,240,200,.7)'; ctx.lineWidth = Math.max(8, 1.5 / cam.s);
+    ctx.beginPath(); ctx.arc(hover.x, hover.y, radius(hover) + 10, 0, Math.PI * 2); ctx.stroke();
+  }
+}
+function edgePath(a, b, arc){
+  const R = T.radii;
+  let cx, cy, r;
+  if (arc && arc[1] != null && R[arc[0]]) { cx = arc[1]; cy = arc[2]; r = R[arc[0]]; }
+  else if (a.g === b.g && a.o === b.o && a.o > 0) { const g = T.groups[a.g]; cx = g.x; cy = g.y; r = R[a.o]; }
+  if (r) {
+    const t1 = Math.atan2(a.y - cy, a.x - cx), t2 = Math.atan2(b.y - cy, b.x - cx);
+    let d = t2 - t1; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+    ctx.arc(cx, cy, r, t1, t1 + d, d < 0);
+  } else { ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+}
+function radius(n){ return n.t === 'keystone' ? 95 : n.t === 'notable' ? 70 : n.t === 'wormhole' ? 120 : n.t === 'mastery' ? 100 : n.t === 'start' ? 110 : 48; }
+
+// ---------- camera ----------
+function fit(){
+  const [x0, y0, x1, y1] = T.box, pad = 500;
+  const side = $('side'), left = side.classList.contains('closed') ? 0 : side.offsetWidth;
+  const avail = W - left > 300 ? W - left : W;
+  cam.s = Math.min(avail / (x1 - x0 + pad * 2), H / (y1 - y0 + pad * 2));
+  cam.x = (x0 + x1) / 2 - (W - avail) / 2 / cam.s; cam.y = (y0 + y1) / 2;
+  requestDraw();
+}
+function zoomAt(f, sx = W / 2, sy = H / 2){
+  const [wx, wy] = screenToWorld(sx, sy);
+  cam.s = Math.min(1.2, Math.max(0.015, cam.s * f));
+  cam.x = wx - (sx - W / 2) / cam.s; cam.y = wy - (sy - H / 2) / cam.s;
+  requestDraw();
+}
+function nodeAt(sx, sy){
+  const [wx, wy] = screenToWorld(sx, sy);
+  let best = null, bd = Infinity;
+  for (const n of T.list) {
+    if (nodeAlpha(n) === 0 || (n.t === 'mastery' && hiddenCats.has(n.cat))) continue;
+    const d = Math.hypot(n.x - wx, n.y - wy), r = Math.max(radius(n), 10 / cam.s);
+    if (d < r && d < bd) { bd = d; best = n; }
+  }
+  return best;
+}
+
+// ---------- tooltip ----------
+const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
+function showTip(n, sx, sy){
+  const tip = $('tip');
+  if (!n) { tip.style.display = 'none'; return; }
+  let h = `<div class="h ${n.t}">${esc(n.n || 'Atlas Start')}</div>`;
+  if (n.t === 'mastery') h += `<div class="c">Cluster: <b>${esc(n.cat)}</b></div>`;
+  else {
+    let body = (n.s || []).map(esc).join('\n');
+    if (n.v) body += n.v.map((v, i) => `<div class="v">Option ${i + 1}: ${v.map(esc).join('\n')}</div>`).join('');
+    if (body) h += `<div class="b">${body}</div>`;
+    if (n.r) h += `<div class="r">${n.r.map(esc).join('\n')}</div>`;
+    if (n.f) h += `<div class="f">${n.f.map(esc).join('\n')}</div>`;
+    if (n.t !== 'start') {
+      let extra = '';
+      if (!isAlloc(n.id) && !hidden.has(n.id) && previewPath) extra = ` · path cost <b>${previewPath.length}</b>`;
+      if (hidden.has(n.id)) extra += ' · <b>hidden</b>';
+      h += `<div class="c">Content: <b>${esc(n.cat)}</b>${n.also ? ' (mentions ' + n.also.map(esc).join(', ') + ')' : ''}${extra}</div>`;
+    }
+  }
+  tip.innerHTML = h; tip.style.display = 'block';
+  const r = tip.getBoundingClientRect();
+  let x = sx + 18, y = sy + 40 + 18;
+  if (x + r.width > window.innerWidth - 6) x = sx - r.width - 18;
+  if (y + r.height > window.innerHeight - 6) y = Math.max(46, window.innerHeight - r.height - 6);
+  tip.style.left = Math.max(4, x) + 'px'; tip.style.top = y + 'px';
+}
+
+// ---------- input ----------
+const pointers = new Map();
+let dragStart = null, moved = false, pinch = null;
+cv.addEventListener('pointerdown', e => {
+  cv.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+  if (pointers.size === 1) { dragStart = { x: e.offsetX, y: e.offsetY, cx: cam.x, cy: cam.y }; moved = false; }
+  if (pointers.size === 2) { const [p, q] = [...pointers.values()]; pinch = { d: Math.hypot(p.x - q.x, p.y - q.y), s: cam.s }; moved = true; }
+});
+cv.addEventListener('pointermove', e => {
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+  if (pinch && pointers.size === 2) {
+    const [p, q] = [...pointers.values()];
+    const f = (pinch.s * Math.hypot(p.x - q.x, p.y - q.y) / pinch.d) / cam.s;
+    zoomAt(f, (p.x + q.x) / 2, (p.y + q.y) / 2); return;
+  }
+  if (dragStart && pointers.size === 1) {
+    const dx = e.offsetX - dragStart.x, dy = e.offsetY - dragStart.y;
+    if (Math.abs(dx) + Math.abs(dy) > 4) { moved = true; cv.classList.add('drag'); }
+    if (moved) { cam.x = dragStart.cx - dx / cam.s; cam.y = dragStart.cy - dy / cam.s; showTip(null); requestDraw(); return; }
+  }
+  const n = nodeAt(e.offsetX, e.offsetY);
+  if (n !== hover) {
+    hover = n;
+    previewPath = n && n.t !== 'mastery' && !isAlloc(n.id) && !hidden.has(n.id) ? findPath(n.id) : null;
+    cv.style.cursor = n && n.t !== 'mastery' ? 'pointer' : '';
+    requestDraw();
+  }
+  showTip(n, e.offsetX, e.offsetY);
+});
+function endPointer(e){
+  const wasClick = pointers.size === 1 && !moved;
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinch = null;
+  if (pointers.size === 0) {
+    cv.classList.remove('drag'); dragStart = null;
+    if (wasClick && e.type === 'pointerup') { const n = nodeAt(e.offsetX, e.offsetY); if (n) { toggleNode(n); hover = null; showTip(n, e.offsetX, e.offsetY); } }
+  }
+}
+cv.addEventListener('pointerup', endPointer);
+cv.addEventListener('pointercancel', endPointer);
+cv.addEventListener('pointerleave', () => { hover = null; previewPath = null; showTip(null); requestDraw(); });
+cv.addEventListener('wheel', e => { e.preventDefault(); zoomAt(Math.exp(-e.deltaY * 0.0015), e.offsetX, e.offsetY); }, { passive: false });
+window.addEventListener('resize', resize);
+
+$('zin').onclick = () => zoomAt(1.4);
+$('zout').onclick = () => zoomAt(1 / 1.4);
+$('fit').onclick = fit;
+$('bgbtn').onclick = () => { opts.bg = !opts.bg; $('bgbtn').classList.toggle('on', opts.bg); store.set('opts', opts); requestDraw(); };
+$('toggle').onclick = () => $('side').classList.toggle('closed');
+$('reset').onclick = () => { alloc = new Set(); afterAllocChange(); };
+document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
+  if (b.dataset.tree === treeName) return;
+  loadTree(b.dataset.tree); alloc = new Set(store.get('alloc.' + treeName) || []); afterAllocChange(); fit();
+});
+function setAll(hide){
+  hiddenCats = new Set(hide ? T.catNames : []);
+  store.set('hidden', [...hiddenCats]); buildCats(); recompute(); updateHash();
+}
+$('all').onclick = () => setAll(false);
+$('none').onclick = () => setAll(true);
+$('invert').onclick = () => { hiddenCats = new Set(T.catNames.filter(c => !hiddenCats.has(c))); store.set('hidden', [...hiddenCats]); buildCats(); recompute(); updateHash(); };
+for (const [id, key] of [['optDim', 'dim'], ['optPrune', 'prune'], ['optStrict', 'strict']]) {
+  $(id).checked = opts[key];
+  $(id).onchange = e => { opts[key] = e.target.checked; store.set('opts', opts); recompute(); };
+}
+$('bgbtn').classList.toggle('on', opts.bg);
+
+// ---------- search ----------
+function runSearch(){
+  const q = $('search').value.trim().toLowerCase();
+  searchHits = [];
+  if (q.length >= 2) {
+    searchHits = T.list.filter(n => n.t !== 'mastery' && nodeAlpha(n) > 0 &&
+      ((n.n || '').toLowerCase().includes(q) || (n.s || []).some(s => s.toLowerCase().includes(q)) ||
+       (n.v || []).some(v => v.some(s => s.toLowerCase().includes(q)))));
+  }
+  searchIdx = -1;
+  $('scount').textContent = q.length >= 2 ? searchHits.length + ' found' : '';
+  requestDraw();
+}
+$('search').addEventListener('input', runSearch);
+$('search').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && searchHits.length) {
+    searchIdx = (searchIdx + 1) % searchHits.length;
+    const n = searchHits[searchIdx];
+    cam.x = n.x; cam.y = n.y; cam.s = Math.max(cam.s, 0.18);
+    $('scount').textContent = `${searchIdx + 1} / ${searchHits.length}`;
+    requestDraw();
+  }
+  if (e.key === 'Escape') { e.target.value = ''; runSearch(); }
+});
+
+// ---------- share / import / export ----------
+function updateHash(){
+  const p = new URLSearchParams();
+  if (treeName !== 'normal') p.set('t', treeName);
+  if (alloc.size) p.set('n', [...alloc].join('.'));
+  if (hiddenCats.size) p.set('h', [...hiddenCats].join('|'));
+  history.replaceState(null, '', p.toString() ? '#' + p.toString() : location.pathname + location.search);
+}
+function readHash(){
+  const p = new URLSearchParams(location.hash.slice(1));
+  if (!location.hash) return false;
+  if (p.get('t') && ATLAS[p.get('t')]) treeName = p.get('t');
+  if (p.has('h')) hiddenCats = new Set(p.get('h').split('|').filter(Boolean));
+  return p.has('n') ? p.get('n').split('.').filter(Boolean) : [];
+}
+function toast(msg){ const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 2200); }
+$('share').onclick = async () => {
+  updateHash();
+  try { await navigator.clipboard.writeText(location.href); toast('Link copied'); }
+  catch { prompt('Copy this link:', location.href); }
+};
+$('exp').onclick = () => {
+  const data = { name: `Atlas ${alloc.size}Pts`, author: 'Atlas Tree Filter', ascendancy: '',
+                 passives: [...alloc].map(Number), inventory_slots: [], skills: [] };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  a.download = `Atlas ${alloc.size}Pts.build`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+$('imp').onclick = () => $('file').click();
+$('file').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const d = JSON.parse(await f.text());
+    const ids = (d.passives || d.nodes || []).map(String).filter(id => T.nodes[id] && T.nodes[id].t !== 'mastery' && T.nodes[id].t !== 'start');
+    alloc = new Set(ids); afterAllocChange();
+    toast(`Imported ${ids.length} node${ids.length === 1 ? '' : 's'}`);
+  } catch (err) { toast('Could not read that file'); }
+  e.target.value = '';
+};
+
+window.__atlas = { get T(){ return T; }, get hidden(){ return hidden; }, get alloc(){ return alloc; }, toggleNode, findPath, cam };
+
+// ---------- boot ----------
+resize();
+const fromHash = readHash();
+loadTree(treeName);
+alloc = new Set((fromHash && fromHash.length ? fromHash : store.get('alloc.' + treeName) || []).filter(id => T.nodes[id]));
+afterAllocChange();
+fit();
+})();
+</script>
+</body>
+</html>
