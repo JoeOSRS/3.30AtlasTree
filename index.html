@@ -95,6 +95,14 @@ canvas.drag{cursor:grabbing}
 #stages .st.cur{border-style:dashed;border-color:var(--gold)}
 #stages .lbl{color:var(--muted);font-size:11px;margin-right:2px}
 #sel .nd .dot{width:8px;height:8px;border-radius:50%;flex:none}
+#shot{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:20;display:none;align-items:center;justify-content:center}
+#shot .box{background:var(--panel);border:1px solid var(--gold);border-radius:6px;max-width:94vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 10px 40px #000}
+#shot .hd{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+#shot .hd b{color:var(--gold2)}
+#shot .hd span{color:var(--muted)}
+#shot canvas{display:block;background:#000;position:static;inset:auto}
+#shot .ft{padding:8px 14px;display:flex;gap:8px;justify-content:flex-end;align-items:center;border-top:1px solid var(--line)}
+#shot .ft .sp{flex:1;color:var(--muted);font-size:12px}
 #hint{position:fixed;right:10px;bottom:10px;color:var(--muted);font-size:11px;z-index:3;text-align:right;pointer-events:none}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--gold);padding:8px 14px;border-radius:4px;display:none;z-index:10}
 @media (max-width:760px){
@@ -117,6 +125,7 @@ canvas.drag{cursor:grabbing}
   <button class="btn wide" id="share" title="Copy a link with your allocated nodes and filters">Share</button>
   <button class="btn wide" id="exp" title="Download allocated nodes as a .build file">Export</button>
   <button class="btn wide" id="imp" title="Load a .build / .json file">Import</button>
+  <button class="btn wide" id="impImg" title="Read your allocated nodes from an in-game screenshot of the atlas tree (or just paste one with Ctrl+V)">From picture</button>
   <button class="btn" id="reset" title="Unallocate everything">Reset</button>
   <button id="points" title="Show the selected-nodes summary">Selected <b>0</b> / 150</button>
 </div>
@@ -149,6 +158,12 @@ canvas.drag{cursor:grabbing}
 <div id="toast"></div>
 <div id="pick"></div>
 <input type="file" id="file" accept=".build,.json" hidden>
+<input type="file" id="imgFile" accept="image/*" hidden>
+<div id="shot"><div class="box">
+  <div class="hd"><b>Import from picture</b><span id="shotMsg"></span></div>
+  <canvas id="shotCv"></canvas>
+  <div class="ft"><span class="sp">Green rings = nodes read as allocated. Check they match, then use them.</span><button class="btn" id="shotCancel">Cancel</button><button class="btn on" id="shotApply">Use these nodes</button></div>
+</div></div>
 <!-- bump ?v= whenever data.js is rebuilt so browsers don't keep a stale cached copy -->
 <script src="data.js?v=3"></script>
 <script>
@@ -547,18 +562,25 @@ function draw(){
     ctx.beginPath(); ctx.arc(hover.x, hover.y, radius(hover) + 10, 0, Math.PI * 2); ctx.stroke();
   }
 }
-function edgePath(a, b, arc){
+// arc geometry of an edge, or null for a straight line
+function edgeGeom(a, b, arc){
   const R = T.radii;
   let cx, cy, r;
   // GGG's "orbit" on custom connections is one step below the real circle, so use the nodes' actual distance from the centre
   if (arc && arc[1] != null && arc[0] > 0) { cx = arc[1]; cy = arc[2]; r = (Math.hypot(a.x - cx, a.y - cy) + Math.hypot(b.x - cx, b.y - cy)) / 2; }
   else if (a.g === b.g && a.o === b.o && a.o > 0) { const g = T.groups[a.g]; cx = g.x; cy = g.y; r = R[a.o]; }
-  if (r) {
-    const t1 = Math.atan2(a.y - cy, a.x - cx), t2 = Math.atan2(b.y - cy, b.x - cx);
-    let d = t2 - t1; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
-    ctx.arc(cx, cy, r, t1, t1 + d, d < 0);
-  } else { ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+  if (!r) return null;
+  const t1 = Math.atan2(a.y - cy, a.x - cx), t2 = Math.atan2(b.y - cy, b.x - cx);
+  let d = t2 - t1; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+  return { cx, cy, r, t1, d };
 }
+function edgePath(a, b, arc){
+  const G = edgeGeom(a, b, arc);
+  if (G) ctx.arc(G.cx, G.cy, G.r, G.t1, G.t1 + G.d, G.d < 0);
+  else { ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+}
+const edgeLen = (a, b, G) => G ? Math.abs(G.d) * G.r : Math.hypot(b.x - a.x, b.y - a.y);
+const edgeAt = (a, b, G, t) => G ? [G.cx + G.r * Math.cos(G.t1 + G.d * t), G.cy + G.r * Math.sin(G.t1 + G.d * t)] : [a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t];
 function radius(n){ return n.t === 'keystone' ? 95 : n.t === 'notable' ? 70 : n.t === 'wormhole' ? 120 : n.t === 'mastery' ? 100 : n.t === 'start' ? 110 : 48; }
 
 // ---------- camera ----------
@@ -886,7 +908,177 @@ $('file').onchange = async e => {
   e.target.value = '';
 };
 
-window.__atlas = { get T(){ return T; }, get hidden(){ return hidden; }, get alloc(){ return alloc; }, get stageOf(){ return stageOf; }, toggleNode, findPath, statParts, cam };
+// ---------- import from screenshot ----------
+// 1. line the tree up with the picture (scale + offset): nodes are small bright blobs, lines are thin bright strokes
+// 2. a line drawn blue = allocated; a node is allocated if it ends a blue line, or has a blue frame next to one
+function readShot(im){
+  const k = Math.min(1, 2600 / Math.max(im.naturalWidth, im.naturalHeight));
+  const w = Math.round(im.naturalWidth * k), h = Math.round(im.naturalHeight * k);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const cx = c.getContext('2d', { willReadFrequently: true }); cx.drawImage(im, 0, 0, w, h);
+  const px = cx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) g[i] = (px[i * 4] + px[i * 4 + 1] + px[i * 4 + 2]) / 3;
+  const box = (a, r) => {                       // mean filter via integral image
+    const W1 = w + 1, I = new Float64Array(W1 * (h + 1)), o = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) { let row = 0; for (let x = 0; x < w; x++) { row += a[y * w + x]; I[(y + 1) * W1 + x + 1] = I[y * W1 + x + 1] + row; } }
+    for (let y = 0; y < h; y++) { const y0 = Math.max(0, y - r), y1 = Math.min(h, y + r + 1);
+      for (let x = 0; x < w; x++) { const x0 = Math.max(0, x - r), x1 = Math.min(w, x + r + 1);
+        o[y * w + x] = (I[y1 * W1 + x1] - I[y0 * W1 + x1] - I[y1 * W1 + x0] + I[y0 * W1 + x0]) / ((y1 - y0) * (x1 - x0)); } }
+    return o;
+  };
+  const b1 = box(g, 1), b7 = box(g, 7), f = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) f[i] = b1[i] - b7[i];
+  return { w, h, px, g, f, fb: box(f, 3), canvas: c };
+}
+function matchShot(S){
+  const { w, h, g } = S;
+  const P = T.list.filter(n => n.t !== 'mastery'), NX = new Float64Array(P.map(n => n.x)), NY = new Float64Array(P.map(n => n.y));
+  const at = (F, X, Y, s, tx, ty, minFrac) => {
+    let sum = 0, cnt = 0;
+    for (let i = 0; i < X.length; i++) {
+      const x = Math.round(X[i] * s + tx), y = Math.round(Y[i] * s + ty);
+      if (x >= 0 && x < w && y >= 0 && y < h) { sum += F[y * w + x]; cnt++; }
+    }
+    return cnt < X.length * minFrac ? -1e9 : sum / cnt;
+  };
+  const nodeScore = (F, s, tx, ty) => at(F, NX, NY, s, tx, ty, 0.25);
+  const local = (F, fn, b, sr, ss, tr, ts) => {
+    let best = b;
+    for (let S2 = b.s * (1 - sr); S2 <= b.s * (1 + sr) + 1e-9; S2 += b.s * ss)
+      for (let tx = b.tx - tr; tx <= b.tx + tr + 1e-9; tx += ts)
+        for (let ty = b.ty - tr; ty <= b.ty + tr + 1e-9; ty += ts) {
+          const v = fn(F, S2, tx, ty); if (v > best.v) best = { v, s: S2, tx, ty };
+        }
+    return best;
+  };
+  // first guess: the tree's full width fills the picture's bright columns
+  let x0 = -1, x1 = -1;
+  for (let x = 0; x < w; x++) { let c = 0; for (let y = 0; y < h; y++) if (g[y * w + x] > 110) c++; if (c > 2) { if (x0 < 0) x0 = x; x1 = x; } }
+  if (x0 < 0) return null;
+  let X0 = Infinity, X1 = -Infinity, Y0 = Infinity, Y1 = -Infinity;
+  for (const n of P) { X0 = Math.min(X0, n.x); X1 = Math.max(X1, n.x); Y0 = Math.min(Y0, n.y); Y1 = Math.max(Y1, n.y); }
+  const s0 = (x1 - x0) / (X1 - X0) * 0.985, tx0 = (x0 + x1) / 2 - (X0 + X1) / 2 * s0;
+  let best = { v: -1e9 };
+  for (const sf of [0.94, 0.97, 1, 1.03, 1.06]) for (let dx = -12; dx <= 12; dx += 6) {
+    const s = s0 * sf, tx = tx0 + dx;
+    for (let ty = -Y1 * s - h * 0.5; ty <= h - Y0 * s + h * 0.5; ty += 2) {
+      const v = nodeScore(S.fb, s, tx, ty); if (v > best.v) best = { v, s, tx, ty };
+    }
+  }
+  best = local(S.fb, nodeScore, best, 0.06, 0.01, 16, 4);
+  best = local(S.f, nodeScore, best, 0.012, 0.003, 4, 1);
+  // final snap onto the drawn lines (thin, so very precise)
+  const LX = [], LY = [];
+  for (const [a, b, arc] of T.edges) {
+    const G = edgeGeom(a, b, arc), L = edgeLen(a, b, G), ma = (radius(a) + 30) / L, mb = (radius(b) + 30) / L;
+    if (ma + mb > 0.8) continue;
+    const k = Math.max(2, Math.floor(L / 60));
+    for (let i = 0; i < k; i++) { const [x, y] = edgeAt(a, b, G, ma + (1 - ma - mb) * (i + 0.5) / k); LX.push(x); LY.push(y); }
+  }
+  const lx = new Float64Array(LX), ly = new Float64Array(LY);
+  const lineScore = (F, s, tx, ty) => at(F, lx, ly, s, tx, ty, 0.25);
+  best.v = lineScore(g, best.s, best.tx, best.ty);
+  best = local(g, lineScore, best, 0.01, 0.001, 3, 0.5);
+  let mean = 0; for (let i = 0; i < w * h; i++) mean += g[i]; mean /= w * h;
+  best.contrast = best.v / Math.max(1, mean);    // lines vs. picture average: well above 1 when the tree is lined up
+  return best;
+}
+function detectShot(S, M){
+  const { w, h, px } = S, { s, tx, ty } = M;
+  const toPx = (x, y) => [x * s + tx, y * s + ty];
+  const blueAt = (x, y) => {                     // allocated lines are light blue; unallocated are brown
+    x = Math.round(x); y = Math.round(y);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const X = x + dx, Y = y + dy; if (X < 0 || Y < 0 || X >= w || Y >= h) continue;
+      const i = (Y * w + X) * 4, r = px[i], b = px[i + 2];
+      if (b >= 110 && b - r >= 40) return true;
+    }
+    return false;
+  };
+  const onEdge = new Set(); let blueEdges = 0;
+  for (const [a, b, arc] of T.edges) {
+    const G = edgeGeom(a, b, arc), L = edgeLen(a, b, G) * s; if (L < 4) continue;
+    let ma = (radius(a) * s + 2) / L, mb = (radius(b) * s + 2) / L;
+    if (ma + mb > 0.8) ma = mb = 0.4;
+    const k = Math.max(3, Math.floor(L / 2.5)); let hit = 0, tot = 0;
+    for (let i = 0; i < k; i++) {
+      const [x, y] = toPx(...edgeAt(a, b, G, ma + (1 - ma - mb) * (i + 0.5) / k));
+      if (x < 0 || y < 0 || x >= w || y >= h) continue;
+      tot++; if (blueAt(x, y)) hit++;
+    }
+    if (tot && hit / tot >= 0.5) { onEdge.add(a.id); onEdge.add(b.id); blueEdges++; }
+  }
+  // blue frame: catches tiny cluster nodes whose short links can't be sampled
+  const frameBlue = n => {
+    const [x, y] = toPx(n.x, n.y), R0 = (n.t === 'keystone' ? 95 : n.t === 'notable' ? 70 : n.t === 'wormhole' ? 120 : 48) * s, v = [];
+    for (const r of [R0 - 1, R0 - 0.5, R0, R0 + 0.5]) for (let i = 0; i < 24; i++) {
+      const X = Math.round(x + r * Math.cos(i * Math.PI / 12)), Y = Math.round(y + r * Math.sin(i * Math.PI / 12));
+      if (X >= 0 && Y >= 0 && X < w && Y < h) { const j = (Y * w + X) * 4; v.push(px[j + 2] - px[j]); }
+    }
+    if (!v.length) return false;
+    v.sort((p, q) => p - q);
+    return v[Math.floor(v.length * 0.6)] >= 30;
+  };
+  const ids = new Set();
+  for (const n of T.list) {
+    if (n.t === 'mastery' || n.t === 'start') continue;
+    if (onEdge.has(n.id)) ids.add(n.id);
+    else if (n.t !== 'wormhole' && neighbours(n.id).some(o => onEdge.has(o)) && frameBlue(n)) ids.add(n.id);
+  }
+  return { ids, blueEdges };
+}
+let shotResult = null;
+async function importShot(file){
+  if (!file || !/^image\//.test(file.type)) return;
+  const url = URL.createObjectURL(file), im = new Image();
+  try { await new Promise((ok, bad) => { im.onload = ok; im.onerror = bad; im.src = url; }); }
+  catch { toast('Could not read that picture'); return; }
+  finally { URL.revokeObjectURL(url); }
+  toast('Reading picture…');
+  await new Promise(r => setTimeout(r, 30));
+  const S = readShot(im), M = matchShot(S);
+  const D = M && M.contrast > 1.6 ? detectShot(S, M) : null;
+  shotResult = D && D.ids.size ? D.ids : null;
+  // preview: the picture with the tree's nodes (faint) and detected nodes (green) drawn on top
+  const cv2 = $('shotCv'); cv2.width = S.w; cv2.height = S.h;
+  const c = cv2.getContext('2d'); c.drawImage(S.canvas, 0, 0);
+  if (M) {
+    const lw = Math.max(1.5, S.w / 700);
+    for (const n of T.list) {
+      if (n.t === 'mastery') continue;
+      const x = n.x * M.s + M.tx, y = n.y * M.s + M.ty, on = shotResult && shotResult.has(n.id);
+      if (!on && !(D)) { c.fillStyle = 'rgba(255,80,80,.8)'; c.fillRect(x - 1, y - 1, 2, 2); continue; }
+      if (!on) continue;
+      c.strokeStyle = '#3dff6a'; c.lineWidth = lw;
+      c.beginPath(); c.arc(x, y, radius(n) * M.s + 3 * lw, 0, Math.PI * 2); c.stroke();
+    }
+  }
+  $('shotMsg').textContent = shotResult
+    ? `Found ${shotResult.size} allocated node${shotResult.size === 1 ? '' : 's'} on the ${treeName === 'ruthless' ? 'Ruthless' : 'Atlas'} tree`
+    : D ? 'Lined the tree up, but found no allocated (blue) paths.'
+        : "Couldn't line the tree up with this picture. Use a screenshot of the atlas tree zoomed fully out, cropped to the tree.";
+  $('shotApply').disabled = !shotResult;
+  // fit the preview inside the window, keeping its shape
+  const k = Math.min(1, window.innerWidth * 0.94 / S.w, (window.innerHeight * 0.92 - 110) / S.h);
+  cv2.style.width = Math.round(S.w * k) + 'px'; cv2.style.height = Math.round(S.h * k) + 'px';
+  $('shot').style.display = 'flex';
+}
+$('impImg').onclick = () => $('imgFile').click();
+$('imgFile').onchange = e => { importShot(e.target.files[0]); e.target.value = ''; };
+document.addEventListener('paste', e => {
+  if (e.target.closest && e.target.closest('input,textarea')) return;
+  const it = [...(e.clipboardData || {}).items || []].find(i => i.type.startsWith('image/'));
+  if (it) { e.preventDefault(); importShot(it.getAsFile()); }
+});
+$('shotCancel').onclick = () => { $('shot').style.display = 'none'; };
+$('shotApply').onclick = () => {
+  if (!shotResult) return;
+  alloc = new Set(shotResult); setStages(null); choices = {};
+  $('shot').style.display = 'none'; afterAllocChange();
+  toast(`Imported ${alloc.size} nodes from the picture`);
+};
+
+window.__atlas = { get T(){ return T; }, get hidden(){ return hidden; }, get alloc(){ return alloc; }, get stageOf(){ return stageOf; }, toggleNode, findPath, statParts, readShot, matchShot, detectShot, importShot, cam };
 
 // ---------- boot ----------
 resize();
