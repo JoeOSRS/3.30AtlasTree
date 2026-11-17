@@ -89,7 +89,8 @@ canvas.drag{cursor:grabbing}
 #tip .c b{color:var(--gold)}
 #stages{position:fixed;top:48px;left:50%;transform:translateX(-50%);z-index:4;display:flex;flex-wrap:wrap;justify-content:center;gap:4px;align-items:center;background:rgba(14,17,24,.88);border:1px solid var(--line);border-radius:4px;padding:4px 6px;max-width:calc(100vw - 32px)}
 #stages .st{display:flex;align-items:center;gap:5px;padding:3px 8px;border:1px solid var(--line);border-radius:3px;background:#0b0e15;color:var(--text);cursor:pointer;font-size:12px}
-#stages .st i{width:10px;height:10px;border-radius:50%;display:inline-block}
+#stages .st i{width:12px;height:12px;border-radius:50%;display:inline-block;cursor:pointer;box-shadow:0 0 0 1px #0008}
+#stages .st i:hover{box-shadow:0 0 0 2px var(--gold2)}
 #stages .st span{color:var(--muted)}
 #stages .st.on{border-color:var(--gold2);background:var(--panel2);box-shadow:0 0 0 1px var(--gold2)}
 #stages .st.cur{border-style:dashed;border-color:var(--gold)}
@@ -153,6 +154,7 @@ canvas.drag{cursor:grabbing}
   <div class="tabs"><button class="btn on" data-mode="cat">By content</button><button class="btn" data-mode="all">All effects</button><button class="btn" data-mode="stage">By stage</button></div>
   <div class="body" id="selBody"></div>
 </div>
+<input type="color" id="stColor" style="position:fixed;left:-99px;top:60px;width:1px;height:1px;opacity:0">
 <div id="stages" title="Each stage gets its own line colour. Nodes you allocate go into the selected stage."></div>
 <div id="hint">Drag to pan · wheel to zoom · click a node to allocate a path · click an allocated node to remove it · Next stage starts a new line colour</div>
 <div id="toast"></div>
@@ -192,12 +194,13 @@ let stageOf = {};                     // allocated node id -> stage index (0-bas
 let curStage = 0;                     // stage new allocations go into
 let focusStage = null;                // stage picked in the bar: everything else is dimmed
 const STAGE_COLORS = ['#d9b35a', '#4fb8f0', '#6fd46f', '#e46fe0', '#ff8a3d', '#f2e24a', '#a98bff', '#ff5a6e', '#3fe0c8', '#ffffff'];
-const stageColor = i => STAGE_COLORS[i % STAGE_COLORS.length];
+let stageCustom = store.get('stageColors') || [];   // colours the user picked, by stage index
+const stageColor = i => stageCustom[i] || STAGE_COLORS[i % STAGE_COLORS.length];
 const stageCount = () => Math.max(curStage, ...Object.values(stageOf), 0) + 1;
 let choices = {};                     // choice node id -> picked option index                // allocated node ids (start excluded)
 let hidden = new Set();               // effective hidden node ids
 let adj = {};                         // id -> [ids] (no masteries)
-let hover = null, previewPath = null, searchHits = [], searchIdx = -1;
+let hover = null, previewPath = null, removePreview = null, searchHits = [], searchIdx = -1;
 const cam = { x: 0, y: 0, s: 0.05 };
 let W = 0, H = 0, dpr = 1;
 
@@ -353,6 +356,12 @@ function reachableFromStart(set){
   for (let i = 0; i < q.length; i++) for (const o of neighbours(q[i])) if (set.has(o) && !ok.has(o)) { ok.add(o); q.push(o); }
   return ok;
 }
+// allocated nodes that would go if n were unallocated (n itself + everything cut off from the start)
+function removalSet(n){
+  const rest = new Set(alloc); rest.delete(n.id);
+  const ok = reachableFromStart(rest);
+  return new Set([...alloc].filter(id => !ok.has(id)));
+}
 function toggleNode(n){
   if (n.t === 'mastery' || n.t === 'start') return;
   if (alloc.has(n.id)) {
@@ -366,7 +375,7 @@ function toggleNode(n){
     p.forEach(id => { alloc.add(id); stageOf[id] = curStage; });
     if (n.v) openPicker(n);
   }
-  previewPath = null;
+  previewPath = null; removePreview = null;
   afterAllocChange();
 }
 function catOf(n){ return n.vc && choices[n.id] != null ? n.vc[choices[n.id]] : n.cat; }
@@ -410,11 +419,25 @@ function renderStages(){
   for (const id of alloc) cnt[stageOf[id] || 0]++;
   let h = '<span class="lbl">Stage</span>';
   for (let i = 0; i < n; i++)
-    h += `<button class="st${i === focusStage ? ' on' : focusStage == null && i === curStage ? ' cur' : ''}" data-st="${i}" title="${i === focusStage ? 'Click again to unselect' : `Show only stage ${i + 1} (new nodes go into it)`}"><i style="background:${stageColor(i)}"></i>${i + 1} <span>${cnt[i]}</span></button>`;
+    h += `<button class="st${i === focusStage ? ' on' : focusStage == null && i === curStage ? ' cur' : ''}" data-st="${i}" title="${i === focusStage ? 'Click again to unselect' : `Show only stage ${i + 1} (new nodes go into it)`}"><i data-sc="${i}" title="Change stage ${i + 1}'s colour" style="background:${stageColor(i)}"></i>${i + 1} <span>${cnt[i]}</span></button>`;
   h += `<button class="btn" id="stNext" title="Start a new stage: the next nodes you allocate get a new line colour">Next stage ›</button>`;
   $('stages').innerHTML = h;
 }
+let colorFor = null;
+$('stColor').addEventListener('input', e => {
+  if (colorFor == null) return;
+  stageCustom[colorFor] = e.target.value;
+  store.set('stageColors', stageCustom);
+  renderStages(); renderSelected(); requestDraw();
+});
 $('stages').addEventListener('click', e => {
+  const sc = e.target.closest('[data-sc]');
+  if (sc) {                                        // the dot opens a colour picker instead of selecting the stage
+    colorFor = +sc.dataset.sc;
+    const inp = $('stColor'), r = sc.getBoundingClientRect();
+    inp.value = stageColor(colorFor); inp.style.left = r.left + 'px'; inp.style.top = r.bottom + 'px';
+    inp.click(); return;
+  }
   const b = e.target.closest('[data-st]');
   if (b) {
     const i = +b.dataset.st;
@@ -507,12 +530,15 @@ function draw(){
     const both = isAlloc(a.id) && isAlloc(b.id);
     const prev = (pathSet.has(a.id) || isAlloc(a.id)) && (pathSet.has(b.id) || isAlloc(b.id)) && (pathSet.has(a.id) || pathSet.has(b.id));
     const st = Math.max(stageOf[a.id] ?? -1, stageOf[b.id] ?? -1);
-    ctx.strokeStyle = both ? stageColor(st < 0 ? 0 : st) : prev ? '#f3e7b0' : '#6b5a3a';
+    const gone = both && removePreview && (removePreview.has(a.id) || removePreview.has(b.id));
+    ctx.strokeStyle = gone ? '#e2403a' : both ? stageColor(st < 0 ? 0 : st) : prev ? '#f3e7b0' : '#6b5a3a';
     ctx.lineWidth = both || prev ? lw * 1.5 : lw;
-    ctx.globalAlpha = al * (both || prev ? 1 : 0.85);
+    ctx.globalAlpha = gone ? 1 : al * (both || prev ? 1 : 0.85);
+    if (gone) ctx.setLineDash([6 / cam.s, 4 / cam.s]);   // dash size in screen pixels
     ctx.beginPath();
     edgePath(a, b, arc);
     ctx.stroke();
+    if (gone) ctx.setLineDash([]);
   }
   ctx.globalAlpha = 1;
   // masteries
@@ -546,6 +572,10 @@ function draw(){
     if (on && n.t !== 'start' && stageCount() > 1) {
       ctx.strokeStyle = stageColor(stageOf[n.id] || 0); ctx.globalAlpha = a; ctx.lineWidth = Math.max(8, 1.4 / cam.s);
       ctx.beginPath(); ctx.arc(n.x, n.y, radius(n) + 6, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
+    }
+    if (removePreview && removePreview.has(n.id)) {
+      ctx.strokeStyle = '#e2403a'; ctx.lineWidth = Math.max(10, 1.8 / cam.s);
+      ctx.beginPath(); ctx.arc(n.x, n.y, radius(n) + 10, 0, Math.PI * 2); ctx.stroke();
     }
     if (marked) {
       ctx.strokeStyle = '#3fc8e8'; ctx.lineWidth = Math.max(10, 1.8 / cam.s);
@@ -626,6 +656,7 @@ function showTip(n, sx, sy){
     if (n.t !== 'start') {
       let extra = '';
       if (!isAlloc(n.id) && !hidden.has(n.id) && previewPath) extra = ` · path cost <b>${previewPath.length}</b>`;
+      if (alloc.has(n.id) && removePreview && removePreview.has(n.id)) extra += ` · click removes <b style="color:#ff6b62">${removePreview.size} node${removePreview.size === 1 ? '' : 's'}</b>`;
       if (hidden.has(n.id)) extra += ' · <b>hidden</b>';
       if (n.v && alloc.has(n.id) && pick == null) extra += ' · <b>no option picked</b>';
       if (alloc.has(n.id) && stageCount() > 1) extra += ` · <b style="color:${stageColor(stageOf[n.id] || 0)}">stage ${(stageOf[n.id] || 0) + 1}</b>`;
@@ -666,6 +697,7 @@ cv.addEventListener('pointermove', e => {
   if (n !== hover) {
     hover = n;
     previewPath = n && n.t !== 'mastery' && !isAlloc(n.id) && !hidden.has(n.id) ? findPath(n.id) : null;
+    removePreview = n && alloc.has(n.id) ? removalSet(n) : null;
     cv.style.cursor = n && n.t !== 'mastery' ? 'pointer' : '';
     requestDraw();
   }
@@ -686,7 +718,7 @@ function endPointer(e){
 }
 cv.addEventListener('pointerup', endPointer);
 cv.addEventListener('pointercancel', endPointer);
-cv.addEventListener('pointerleave', () => { hover = null; previewPath = null; showTip(null); requestDraw(); });
+cv.addEventListener('pointerleave', () => { hover = null; previewPath = null; removePreview = null; showTip(null); requestDraw(); });
 cv.addEventListener('wheel', e => { e.preventDefault(); zoomAt(Math.exp(-e.deltaY * 0.0015), e.offsetX, e.offsetY); }, { passive: false });
 window.addEventListener('resize', resize);
 
@@ -884,7 +916,7 @@ $('exp').onclick = () => {
   const data = { name: `Atlas ${alloc.size}Pts`, author: 'Atlas Tree Filter', ascendancy: '',
                  passives: [...alloc].map(Number), inventory_slots: [], skills: [],
                  // extra fields for this tool: stage per passive (same order), current stage, picked choice options
-                 stages: [...alloc].map(id => stageOf[id] || 0), currentStage: curStage, choices };
+                 stages: [...alloc].map(id => stageOf[id] || 0), currentStage: curStage, stageColors: stageCustom, choices };
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
   a.download = `Atlas ${alloc.size}Pts.build`; a.click();
@@ -900,6 +932,7 @@ $('file').onchange = async e => {
     const of = {};
     if (Array.isArray(d.stages)) (d.passives || d.nodes || []).forEach((id, i) => { if (d.stages[i] != null) of[String(id)] = +d.stages[i] || 0; });
     setStages({ of, cur: +d.currentStage || 0 });
+    if (Array.isArray(d.stageColors)) { stageCustom = d.stageColors.map(c => /^#[0-9a-f]{6}$/i.test(c) ? c : null); store.set('stageColors', stageCustom); }
     choices = {};
     if (d.choices && typeof d.choices === 'object') for (const k in d.choices) if (alloc.has(k)) choices[k] = +d.choices[k];
     afterAllocChange();
